@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Location Feed · Swarmbox inventory</title>
+  <style>
+    :root {
+      --bg:#0f172a; --panel:#1e293b; --panel2:#172033; --line:#334155;
+      --text:#e2e8f0; --muted:#94a3b8; --accent:#38bdf8; --accent2:#22d3ee;
+      --good:#34d399; --warn:#fbbf24; --err:#f87171; --chip:#0b1220;
+    }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--text);
+      font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+    a { color:var(--accent); }
+    header { position:sticky; top:0; z-index:5; display:flex; align-items:center; gap:16px;
+      padding:12px 20px; background:rgba(15,23,42,.92); backdrop-filter:blur(6px);
+      border-bottom:1px solid var(--line); flex-wrap:wrap; }
+    header h1 { margin:0; font-size:16px; letter-spacing:.02em; white-space:nowrap; }
+    .grow { flex:1 1 auto; }
+    .status { font-size:12px; color:var(--muted); display:flex; align-items:center; gap:7px; white-space:nowrap; }
+    .dot { width:9px; height:9px; border-radius:50%; background:var(--muted); }
+    .dot.ok { background:var(--good); } .dot.warn { background:var(--warn); } .dot.err { background:var(--err); }
+    .who { font-size:12px; color:var(--muted); }
+    .badge { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; font-weight:700;
+      text-transform:uppercase; letter-spacing:.05em; }
+    .badge.editor { background:#0e3b2e; color:var(--good); border:1px solid #14563f; }
+    .badge.viewer { background:#0b2a3b; color:var(--accent); border:1px solid #14415a; }
+    button.link { background:none; border:0; color:var(--muted); cursor:pointer; font-size:12px; text-decoration:underline; }
+
+    .wrap { max-width:1180px; margin:0 auto; padding:20px; }
+    .search { display:flex; gap:10px; align-items:center; margin-bottom:8px; flex-wrap:wrap; }
+    .search input { flex:1 1 320px; min-width:220px; padding:12px 14px; font-size:16px;
+      border-radius:10px; border:1px solid var(--line); background:var(--panel2); color:var(--text); }
+    .search input:focus { outline:none; border-color:var(--accent); }
+    .hint { color:var(--muted); font-size:12px; margin:2px 2px 20px; }
+
+    .cols { display:grid; grid-template-columns:1fr 320px; gap:20px; align-items:start; }
+    @media (max-width:860px){ .cols { grid-template-columns:1fr; } }
+
+    .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; overflow:hidden; }
+    .card h2 { margin:0; padding:13px 16px; font-size:13px; text-transform:uppercase; letter-spacing:.06em;
+      color:var(--muted); border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center; gap:8px; }
+    .loc-title { font-size:20px; font-weight:800; color:var(--text); letter-spacing:.03em; }
+
+    .totals { display:flex; gap:22px; padding:12px 16px; flex-wrap:wrap; border-bottom:1px solid var(--line); background:var(--panel2); }
+    .stat b { display:block; font-size:19px; } .stat span { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.05em; }
+
+    table { width:100%; border-collapse:collapse; }
+    th, td { text-align:left; padding:9px 12px; border-bottom:1px solid var(--line); vertical-align:top; }
+    th { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); position:sticky; top:0; }
+    td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; }
+    tr:hover td { background:rgba(56,189,248,.05); }
+    .mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+    .desc { color:var(--muted); }
+    .chip { display:inline-block; padding:1px 7px; border-radius:6px; font-size:11px; margin:1px 3px 1px 0;
+      background:var(--chip); border:1px solid var(--line); white-space:nowrap; }
+    .chip.FRESH { color:var(--good); border-color:#14563f; }
+    .chip.DRY { color:var(--warn); border-color:#5a4514; }
+    .chip.FROZEN { color:var(--accent2); border-color:#14415a; }
+    .chip.TEMP { color:#c4b5fd; border-color:#3b3160; }
+    .age-old { color:var(--warn); }
+    .barcode { font-size:10px; color:var(--muted); word-break:break-all; max-width:170px; white-space:normal; }
+
+    /* Notes panel */
+    .notes { padding:14px 16px; }
+    .flags { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:12px; }
+    .flag { display:flex; align-items:center; gap:6px; padding:6px 10px; border-radius:8px;
+      border:1px solid var(--line); background:var(--panel2); font-size:12px; cursor:default; user-select:none; }
+    .flag.on { border-color:var(--accent); box-shadow:inset 0 0 0 1px var(--accent); }
+    .flag.editable { cursor:pointer; }
+    .flag.reserved.on { color:var(--accent); }
+    .flag.damaged.on { color:var(--err); border-color:var(--err); box-shadow:inset 0 0 0 1px var(--err); }
+    .flag.needs_recount.on { color:var(--warn); border-color:var(--warn); box-shadow:inset 0 0 0 1px var(--warn); }
+    .flag.do_not_ship.on { color:var(--err); border-color:var(--err); box-shadow:inset 0 0 0 1px var(--err); }
+    textarea { width:100%; min-height:90px; resize:vertical; padding:10px; border-radius:9px;
+      border:1px solid var(--line); background:var(--panel2); color:var(--text); font:inherit; }
+    textarea[readonly] { color:var(--muted); }
+    .notes-actions { display:flex; justify-content:space-between; align-items:center; margin-top:10px; gap:10px; }
+    .notes-actions button { padding:8px 16px; border:0; border-radius:8px; background:var(--accent);
+      color:#04222f; font-weight:700; cursor:pointer; }
+    .notes-actions button:disabled { opacity:.5; cursor:default; }
+    .meta { font-size:11px; color:var(--muted); }
+    .readonly-note { font-size:12px; color:var(--muted); font-style:italic; }
+
+    .empty { padding:40px 16px; text-align:center; color:var(--muted); }
+    .banner { margin:0 0 16px; padding:10px 14px; border-radius:9px; font-size:13px; }
+    .banner.warn { background:#3b2a0b; color:var(--warn); border:1px solid #5a4514; }
+    .banner.err { background:#3b0f0f; color:var(--err); border:1px solid #5a1414; }
+    .hidden { display:none; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>📍 Location Feed</h1>
+    <div class="status"><span class="dot" id="dot"></span><span id="statusText">connecting…</span></div>
+    <div class="grow"></div>
+    <span class="who" id="who"></span>
+    <button class="link" id="logout">Sign out</button>
+  </header>
+
+  <div class="wrap">
+    <div class="search">
+      <input id="loc" list="locs" placeholder="Type a GT location — e.g. GT.2.Z2.C03" autocomplete="off" spellcheck="false">
+      <datalist id="locs"></datalist>
+    </div>
+    <div class="hint" id="hint">Loading locations…</div>
+
+    <div id="banner"></div>
+
+    <div class="cols">
+      <div class="card" id="feedCard">
+        <div class="empty" id="feedEmpty">Pick a location to see what's in it.</div>
+        <div id="feed" class="hidden"></div>
+      </div>
+
+      <div class="card hidden" id="notesCard">
+        <h2>Notes &amp; flags</h2>
+        <div class="notes" id="notes"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) =>
+      ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+    const fmtInt = (n) => Math.round(n).toLocaleString();
+    const fmtQty = (n) => (Math.abs(n % 1) < 1e-9 ? Math.round(n).toLocaleString()
+      : n.toLocaleString(undefined, { maximumFractionDigits: 2 }));
+    const money = (n) => '$' + Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const FLAG_LABELS = { reserved:'Reserved', damaged:'Damaged', needs_recount:'Needs recount', do_not_ship:'Do not ship' };
+
+    let ME = { username:'', role:'viewer' };
+    let CURRENT = null;   // current location code
+    let DIRTY = false;    // unsaved note edits (so auto-refresh doesn't clobber them)
+
+    function daysSince(dateStr) {
+      if (!dateStr) return null;
+      const d = new Date(dateStr + 'T00:00:00');
+      if (isNaN(d)) return null;
+      return Math.floor((Date.now() - d.getTime()) / 86400000);
+    }
+
+    // ── Snapshot status ────────────────────────────────────────────────────────
+    async function refreshStatus() {
+      try {
+        const s = await (await fetch('/api/status')).json();
+        const dot = $('dot'), txt = $('statusText');
+        dot.className = 'dot ' + (s.building && !s.ok ? 'warn' : s.ok ? 'ok' : 'err');
+        if (!s.ok && s.building) txt.textContent = 'building first snapshot…';
+        else if (!s.ok) txt.textContent = 'snapshot unavailable' + (s.lastError ? ' — ' + s.lastError : '');
+        else {
+          const when = s.builtAt ? new Date(s.builtAt) : null;
+          const scope = s.prefix ? `${esc(s.prefix)} · ` : '';
+          txt.textContent = `${scope}${fmtInt(s.rowCount)} units · ${fmtInt(s.locationCount)} locations · as of ${when ? when.toLocaleTimeString() : '—'}`
+            + (s.building ? ' · refreshing…' : '');
+        }
+        $('hint').textContent = s.ok
+          ? (s.prefix ? `Showing ${esc(s.prefix)} locations only. Start typing to search.` : 'Start typing to search locations. Data refreshes automatically.')
+          : (s.building ? 'Pulling inventory from Swarmbox — one moment…' : 'Waiting for Swarmbox…');
+        return s;
+      } catch (_) {
+        $('dot').className = 'dot err'; $('statusText').textContent = 'offline';
+        return null;
+      }
+    }
+
+    // ── Location typeahead ─────────────────────────────────────────────────────
+    let searchTimer = null;
+    async function updateSuggestions(q) {
+      try {
+        const r = await (await fetch('/api/locations?q=' + encodeURIComponent(q))).json();
+        $('locs').innerHTML = (r.matches || []).map((c) => `<option value="${esc(c)}">`).join('');
+      } catch (_) {}
+    }
+    $('loc').addEventListener('input', (e) => {
+      clearTimeout(searchTimer);
+      const v = e.target.value.trim();
+      searchTimer = setTimeout(() => updateSuggestions(v), 150);
+      // If the user picked an exact suggestion, load it.
+      if ($('locs').querySelector(`option[value="${CSS.escape(v)}"]`)) loadLocation(v);
+    });
+    $('loc').addEventListener('change', (e) => { const v = e.target.value.trim(); if (v) loadLocation(v); });
+    $('loc').addEventListener('keydown', (e) => { if (e.key === 'Enter') { const v = e.target.value.trim(); if (v) loadLocation(v); } });
+
+    // ── Load one location ──────────────────────────────────────────────────────
+    async function loadLocation(code, silent) {
+      if (!code) return;
+      CURRENT = code;
+      try {
+        const data = await (await fetch('/api/location/' + encodeURIComponent(code))).json();
+        renderFeed(data);
+        renderNotes(data.code, data.note);
+      } catch (_) {
+        if (!silent) $('banner').innerHTML = '<div class="banner err">Could not load that location.</div>';
+      }
+    }
+
+    function renderFeed(data) {
+      $('feedEmpty').classList.add('hidden');
+      const feed = $('feed'); feed.classList.remove('hidden');
+      $('banner').innerHTML = '';
+
+      if (!data.found) {
+        feed.innerHTML = `<div class="empty">No stock currently at <b>${esc(data.code)}</b>.<br>
+          <span style="font-size:12px">It may be empty, or not a GT location in the latest snapshot.</span></div>`;
+        return;
+      }
+      const rows = data.rows || [];
+      const when = data.builtAt ? new Date(data.builtAt) : null;
+      const weightStr = (data.weight || []).length
+        ? data.weight.map((w) => `${fmtQty(w.qty)} ${esc(w.uom)}`).join(' · ') : '—';
+      const lean = (v) => (v == null ? '—' : (v <= 1 ? (v * 100).toFixed(1) + '%' : fmtQty(v)));
+      const ageCell = (d) => {
+        if (!d) return '—';
+        const days = daysSince(d);
+        const cls = days != null && days > 180 ? ' age-old' : '';
+        return `<span class="${cls}">${esc(d)}${days != null ? ` <span class="desc">(${fmtInt(days)}d)</span>` : ''}</span>`;
+      };
+      const packCell = (q, u) => (q ? `${fmtQty(q)} <span class="desc">${esc(u || '')}</span>` : '—');
+
+      feed.innerHTML = `
+        <h2><span class="loc-title mono">${esc(data.code)}</span>
+          <span class="meta">as of ${when ? when.toLocaleTimeString() : '—'}</span></h2>
+        <div class="totals">
+          <div class="stat"><b>${fmtInt(data.products)}</b><span>Products</span></div>
+          <div class="stat"><b>${fmtInt(data.pallets)}</b><span>Pallets</span></div>
+          <div class="stat"><b>${fmtInt(data.lineCount)}</b><span>Units</span></div>
+          <div class="stat"><b>${weightStr}</b><span>Total weight</span></div>
+        </div>
+        <div style="overflow-x:auto">
+        <table>
+          <thead><tr>
+            <th>Product</th><th>Description</th><th>Pallet ID</th><th>Serial</th>
+            <th class="num">Pack</th><th class="num">Quantity</th><th class="num">Lean</th>
+            <th>State</th><th>Received</th><th>PO #</th><th>Manufacturer</th><th>Barcode</th>
+          </tr></thead>
+          <tbody>
+            ${rows.map((r) => `
+              <tr>
+                <td class="mono">${esc(r.item)}</td>
+                <td class="desc">${esc(r.description) || '—'}</td>
+                <td class="mono">${esc(r.pallet) || '—'}</td>
+                <td class="mono">${esc(r.serial) || '—'}</td>
+                <td class="num">${packCell(r.baseQty, r.baseUom)}</td>
+                <td class="num">${packCell(r.varQty, r.varUom)}</td>
+                <td class="num">${lean(r.lean)}</td>
+                <td>${r.state ? `<span class="chip ${esc(r.state)}">${esc(r.state)}</span>` : '—'}</td>
+                <td>${ageCell(r.date)}</td>
+                <td class="mono">${esc(r.po) || '—'}</td>
+                <td>${esc(r.manufacturer) || '—'}</td>
+                <td class="mono barcode">${esc(r.barcode) || '—'}</td>
+              </tr>`).join('')}
+          </tbody>
+        </table></div>`;
+    }
+
+    // ── Notes & flags ──────────────────────────────────────────────────────────
+    function renderNotes(code, note) {
+      $('notesCard').classList.remove('hidden');
+      const isEditor = ME.role === 'editor';
+      const flags = (note && note.flags) || {};
+      const box = $('notes');
+      DIRTY = false;
+
+      const flagChips = Object.keys(FLAG_LABELS).map((k) => `
+        <div class="flag ${k} ${flags[k] ? 'on' : ''} ${isEditor ? 'editable' : ''}" data-flag="${k}">
+          <span>${flags[k] ? '☑' : '☐'}</span>${FLAG_LABELS[k]}
+        </div>`).join('');
+
+      const meta = note && note.updatedAt
+        ? `<div class="meta">Last edit ${esc(note.updatedBy || '?')} · ${new Date(note.updatedAt).toLocaleString()}</div>`
+        : `<div class="meta">No notes yet.</div>`;
+
+      box.innerHTML = `
+        <div class="flags">${flagChips}</div>
+        <textarea id="noteText" ${isEditor ? '' : 'readonly'} placeholder="${isEditor ? 'Add a note about this location…' : 'No note.'}">${esc((note && note.note) || '')}</textarea>
+        <div class="notes-actions">
+          ${meta}
+          ${isEditor ? '<button id="saveNote" disabled>Save</button>'
+            : '<span class="readonly-note">read-only</span>'}
+        </div>`;
+
+      if (isEditor) {
+        const save = $('saveNote');
+        const markDirty = () => { DIRTY = true; save.disabled = false; };
+        box.querySelectorAll('.flag.editable').forEach((el) => el.addEventListener('click', () => {
+          const on = !el.classList.contains('on');
+          el.classList.toggle('on', on);
+          el.querySelector('span').textContent = on ? '☑' : '☐';
+          markDirty();
+        }));
+        $('noteText').addEventListener('input', markDirty);
+        save.addEventListener('click', () => saveNotes(code));
+      }
+    }
+
+    async function saveNotes(code) {
+      const flags = {};
+      $('notes').querySelectorAll('.flag').forEach((el) => { if (el.classList.contains('on')) flags[el.dataset.flag] = true; });
+      const body = { note: $('noteText').value, flags };
+      const btn = $('saveNote'); btn.disabled = true; btn.textContent = 'Saving…';
+      try {
+        const res = await fetch('/api/notes/' + encodeURIComponent(code), {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+        });
+        if (!res.ok) throw new Error();
+        const saved = await res.json();
+        renderNotes(code, saved);
+      } catch (_) {
+        btn.disabled = false; btn.textContent = 'Save';
+        $('banner').innerHTML = '<div class="banner err">Could not save notes (are you still signed in as an editor?).</div>';
+        return;
+      }
+      btn.textContent = 'Save';
+    }
+
+    // ── Boot ───────────────────────────────────────────────────────────────────
+    $('logout').addEventListener('click', async () => {
+      await fetch('/api/logout', { method: 'POST' });
+      location.href = '/login.html';
+    });
+
+    async function init() {
+      try {
+        ME = await (await fetch('/api/session')).json();
+        $('who').innerHTML = `${esc(ME.username)} <span class="badge ${ME.role}">${esc(ME.role)}</span>`;
+      } catch (_) { location.href = '/login.html'; return; }
+
+      await refreshStatus();
+      updateSuggestions('');
+
+      // Auto-refresh: status every 15s; the open location every 30s (silent, and
+      // never while the editor has unsaved note edits).
+      setInterval(refreshStatus, 15000);
+      setInterval(() => { if (CURRENT && !DIRTY) loadLocation(CURRENT, true); }, 30000);
+    }
+    init();
+  </script>
+</body>
+</html>
