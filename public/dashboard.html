@@ -140,12 +140,12 @@
       const cls = days != null && days > 180 ? 'age-old' : '';
       return `<span class="${cls}">${esc(d)}${days != null ? ` (${fmtInt(days)}d)` : ''}</span>`;
     };
-    // TEMP older than 6 days goes red — the tempering clock. TEMP only: an old
+    // TEMP for 6+ days goes red — the tempering clock. TEMP only: an old
     // "since" on FROZEN is harmless and would drown the signal.
     const stateCell = (p) => {
       if (!p.state) return '—';
       const days = daysSince(p.stateDate);
-      const late = p.state === 'TEMP' && days != null && days > 6;
+      const late = p.state === 'TEMP' && days != null && days >= 6;
       return `<span class="chip ${esc(p.state)}${late ? ' late' : ''}">${esc(p.state)}</span>` +
         (p.stateDate ? `<div class="desc ${late ? 'since-late' : ''}" style="font-size:10px">since ${esc(p.stateDate)}${days != null ? ` (${fmtInt(days)}d)` : ''}</div>` : '');
     };

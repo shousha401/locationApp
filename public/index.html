@@ -360,12 +360,12 @@
       const packCell = (q, u) => (q ? `${fmtQty(q)} <span class="desc">${esc(u || '')}</span>` : '—');
       // Per-unit state with the date it ENTERED that state — for a TEMP unit,
       // "since" is exactly when it stopped being frozen (Clay's ask).
-      // TEMP older than 6 days goes red: that's the tempering clock. Only TEMP —
+      // TEMP for 6+ days goes red: that's the tempering clock. Only TEMP —
       // an old "since" on FROZEN is harmless and would drown the signal.
       const stateCell = (u) => {
         if (!u.state) return '—';
         const days = daysSince(u.stateDate);
-        const late = u.state === 'TEMP' && days != null && days > 6;
+        const late = u.state === 'TEMP' && days != null && days >= 6;
         return `<span class="chip ${esc(u.state)}${late ? ' late' : ''}">${esc(u.state)}</span>` +
           (u.stateDate ? `<div class="since${late ? ' late' : ''}">since ${esc(u.stateDate)}${days != null ? ` (${fmtInt(days)}d)` : ''}</div>` : '');
       };
