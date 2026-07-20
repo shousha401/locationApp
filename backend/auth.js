@@ -16,6 +16,25 @@ const SESSION_TTL_MS = Number(process.env.SESSION_TTL_MS) || 12 * 60 * 60 * 1000
 const COOKIE = 'loc_session';
 const FAIL_DELAY_MS = 600; // slow down guessing without a lockout table
 
+// Narrow API-key lane, mirroring valueTool's: a matching X-Api-Key header stands
+// in for a session on the REQUESTS CHANNEL ONLY, so the build side can read and
+// answer the queue from scripts without a browser. The key is deliberately
+// useless anywhere else — inventory, notes, users all still demand a login.
+// Unset API_KEY disables the lane entirely.
+const API_KEY = process.env.API_KEY || '';
+const API_PATH = '/api/requests';
+
+function apiKeyUser(req) {
+  if (!API_KEY) return null;
+  if (req.path !== API_PATH && !req.path.startsWith(API_PATH + '/')) return null;
+  const got = req.headers['x-api-key'];
+  if (typeof got !== 'string' || got.length !== API_KEY.length) return null;
+  if (!crypto.timingSafeEqual(Buffer.from(got), Buffer.from(API_KEY))) return null;
+  // Admin RANK so it can mark items done, but the path guard above means this
+  // identity is only ever seen by the requests routes.
+  return { username: 'api', role: 'admin' };
+}
+
 const sessions = new Map(); // token -> { exp, username, role }
 
 function readToken(req) {
@@ -47,6 +66,13 @@ function currentUser(req) {
 // Gate. Exemptions: the login page and the login call itself.
 function middleware(req, res, next) {
   if (req.path === '/login.html' || req.path === '/api/login') return next();
+  const viaKey = apiKeyUser(req);
+  if (viaKey) {
+    // Audit every key-authenticated request (method/path/ip — never the key).
+    console.log(`[Auth] api-key ${req.method} ${req.path} from ${req.ip}`);
+    req.user = viaKey;
+    return next();
+  }
   const u = currentUser(req);
   if (u) {
     req.user = { username: u.username, role: u.role };

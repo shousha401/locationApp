@@ -14,7 +14,10 @@
 
 const { getRows, withRetry } = require('./swarmbox');
 
-const REFRESH_MS = Number(process.env.SNAPSHOT_REFRESH_MS) || 5 * 60 * 1000; // 5 min
+// 15 min default: pallets sit for hours-to-days, so refreshing faster just
+// re-downloads an identical snapshot — this is the app's ONLY Swarmbox load,
+// and being gentle with Swarmbox outranks freshness nobody can perceive.
+const REFRESH_MS = Number(process.env.SNAPSHOT_REFRESH_MS) || 15 * 60 * 1000;
 
 // Scope the whole app to one location prefix (a manager asked for GT-only). Set
 // LOCATION_PREFIX='' to serve every location. The filter is pushed down to Swarmbox
@@ -181,6 +184,91 @@ function getLocation(code) {
   };
 }
 
+// Whole-snapshot aggregates for the dashboard: totals, the state mix (the
+// tempering pipeline), oldest pallets, biggest products, and a one-line summary
+// per location. Pure RAM reads over ~1.7k rows — cheap enough to recompute per
+// request, and zero extra Swarmbox load.
+function overview() {
+  const addW = (map, uom, qty) => { if (uom) map.set(uom, (map.get(uom) || 0) + qty); };
+  const wArr = (map) => [...map.entries()].map(([uom, qty]) => ({ uom, qty }));
+
+  const totalsW = new Map();
+  const allPallets = new Set();
+  const allProducts = new Set();
+  let units = 0;
+
+  const states = new Map();   // state -> { units, pallets:Set, weight:Map }
+  const products = new Map(); // item  -> { item, description, units, pallets:Set, weight:Map }
+  const pallets = new Map();  // pallet|item -> { pallet, item, location, date, state, stateDate, units, weight:Map }
+  const locations = [];
+
+  for (const [code, rows] of snap.byLocation) {
+    const loc = { code, products: new Set(), pallets: new Set(), units: rows.length,
+      weight: new Map(), states: new Set(), oldest: null };
+    for (const r of rows) {
+      units++;
+      allProducts.add(r.item); loc.products.add(r.item);
+      if (r.pallet) { allPallets.add(r.pallet); loc.pallets.add(r.pallet); }
+      addW(totalsW, r.varUom, r.varQty); addW(loc.weight, r.varUom, r.varQty);
+      if (r.date && (!loc.oldest || r.date < loc.oldest)) loc.oldest = r.date;
+
+      const st = r.state || 'UNKNOWN';
+      loc.states.add(st);
+      let s = states.get(st);
+      if (!s) { s = { state: st, units: 0, pallets: new Set(), weight: new Map() }; states.set(st, s); }
+      s.units++; if (r.pallet) s.pallets.add(r.pallet); addW(s.weight, r.varUom, r.varQty);
+
+      let p = products.get(r.item);
+      if (!p) {
+        p = { item: r.item, description: snap.itemDesc.get(r.item) || '',
+          units: 0, pallets: new Set(), weight: new Map() };
+        products.set(r.item, p);
+      }
+      p.units++; if (r.pallet) p.pallets.add(r.pallet); addW(p.weight, r.varUom, r.varQty);
+
+      const pk = (r.pallet || '~') + '|' + r.item;
+      let pa = pallets.get(pk);
+      if (!pa) {
+        pa = { pallet: r.pallet, item: r.item, description: snap.itemDesc.get(r.item) || '',
+          location: code, date: r.date, state: r.state, stateDate: r.stateDate, units: 0, weight: new Map() };
+        pallets.set(pk, pa);
+      }
+      pa.units++; addW(pa.weight, r.varUom, r.varQty);
+      if (r.date && (!pa.date || r.date < pa.date)) pa.date = r.date;
+    }
+    locations.push({
+      code, products: loc.products.size, pallets: loc.pallets.size, units: loc.units,
+      weight: wArr(loc.weight), states: [...loc.states].sort(), oldest: loc.oldest,
+    });
+  }
+  locations.sort((a, b) => (a.code < b.code ? -1 : 1));
+
+  // "Biggest" ranks by the pallet count first, then the largest single-UOM
+  // weight — comparing summed LB+CS+EA totals across items would be meaningless.
+  const maxW = (m) => Math.max(0, ...m.weight.values());
+  const topProducts = [...products.values()]
+    .sort((a, b) => (b.pallets.size - a.pallets.size) || (maxW(b) - maxW(a)))
+    .slice(0, 15)
+    .map((p) => ({ item: p.item, description: p.description, units: p.units,
+      pallets: p.pallets.size, weight: wArr(p.weight) }));
+
+  const oldestPallets = [...pallets.values()]
+    .filter((p) => p.date)
+    .sort((a, b) => (a.date < b.date ? -1 : 1))
+    .slice(0, 15)
+    .map((p) => ({ ...p, weight: wArr(p.weight) }));
+
+  return {
+    ok: snap.ok, builtAt: snap.builtAt, prefix: PREFIX,
+    totals: { units, pallets: allPallets.size, products: allProducts.size,
+      locations: locations.length, weight: wArr(totalsW) },
+    states: [...states.values()]
+      .sort((a, b) => b.units - a.units)
+      .map((s) => ({ state: s.state, units: s.units, pallets: s.pallets.size, weight: wArr(s.weight) })),
+    oldestPallets, topProducts, locations,
+  };
+}
+
 let timer = null;
 function start() {
   refresh(); // warm on boot
@@ -189,4 +277,4 @@ function start() {
   if (timer.unref) timer.unref();
 }
 
-module.exports = { start, refresh, status, searchLocations, getLocation };
+module.exports = { start, refresh, status, searchLocations, getLocation, overview };

@@ -2,9 +2,21 @@
 
 A live view of **Swarmbox inventory by location**. Type a bin code (e.g. `TC.22.L.02`)
 and see exactly what's sitting there right now — items, quantities, state
-(FRESH/DRY/FROZEN), age, pallet count, and inventory value — refreshing on its own.
+(FRESH/FROZEN/TEMP, with the date each unit entered that state), received dates,
+pallet count — refreshing on its own. Deliberately **no cost/value data**.
 `editor`s can attach **notes and status flags** to a location; `viewer`s see them
 read-only.
+
+Three pages, all behind the same login:
+
+- **📍 Feed** (`/`) — one location's contents, grouped by pallet, scannable barcodes.
+  Deep-linkable: `/?loc=GT.2.Z2.C03` opens straight on that bin.
+- **📊 Dashboard** (`/dashboard.html`) — whole-warehouse aggregates from the same
+  snapshot: totals, the frozen→temp state mix, oldest pallets, biggest products,
+  and a clickable **all-locations** table.
+- **💬 Requests** (`/requests.html`) — the app's build queue. Users write what they
+  want the app to show; the build side reads the thread and ships it. Seeded with
+  interview questions on first run.
 
 ## How it works
 
@@ -17,10 +29,12 @@ last good snapshot (with a visible "as of" stamp), so a Swarmbox blip degrades t
 slightly-stale, never blank.
 
 - `backend/swarmbox.js` — PostgREST client (retries, circuit breaker, timeouts), lifted from valueTool.
-- `backend/inventory.js` — the snapshot: pull → index by location → group by item.
+- `backend/inventory.js` — the snapshot: pull → index by location; also the dashboard's `overview()` aggregates.
 - `backend/notes.js` — the app's own notes/flags layer (never writes to Swarmbox).
-- `backend/users.js` + `backend/auth.js` — per-user login with `viewer`/`editor` roles.
-- `public/` — the login screen and the single-page feed.
+- `backend/requests.js` — the build-queue thread (`data/requests.json`).
+- `backend/users.js` + `backend/auth.js` — per-user login with `viewer`/`editor`/`admin` roles,
+  plus a narrow `X-Api-Key` lane scoped to `/api/requests*` only.
+- `public/` — the login screen, the feed, the dashboard, and the requests thread.
 
 ## Setup
 
@@ -75,10 +89,29 @@ Re-running `add-user.js` with an existing username resets that user's password/r
 |----------------------|--------------------------------------|------------------------------------------|
 | `PORT`               | `3005`                               | Listen port (3010 is CMP Maintenance)    |
 | `LOCATION_PREFIX`    | `GT`                                 | Only serve locations with this prefix    |
-| `SNAPSHOT_REFRESH_MS`| `300000` (5 min)                     | How often to re-pull the full inventory  |
+| `SNAPSHOT_REFRESH_MS`| `900000` (15 min)                    | How often to re-pull the full inventory  |
 | `SWARMBOX_BASE_URL`  | `https://jdfood.swarmbox.com:443/pg-api` | Swarmbox PostgREST base             |
 | `SWARMBOX_TIMEOUT_MS`| `120000`                             | Per-call timeout (the pull is big)       |
 | `SESSION_TTL_MS`     | `43200000` (12h)                     | Sliding session lifetime                 |
+| `API_KEY`            | unset (lane disabled)                | `X-Api-Key` for `/api/requests*` ONLY — lets the build side read/answer the queue without a browser session |
+
+## The requests channel
+
+`/requests.html` is a flat message thread: anyone signed in (viewers included) posts
+what they want the app to show; admins can mark items done. It seeds itself with
+opening interview questions on first run. Over the API-key lane:
+
+```bash
+curl -H "X-Api-Key: $KEY" http://10.14.1.184:3005/api/requests
+curl -H "X-Api-Key: $KEY" -H "Content-Type: application/json" \
+     -d '{"text":"Built — see the dashboard.","author":"eslam"}' \
+     http://10.14.1.184:3005/api/requests
+curl -H "X-Api-Key: $KEY" -X PATCH -H "Content-Type: application/json" \
+     -d '{"done":true}' http://10.14.1.184:3005/api/requests/3
+```
+
+Key-authenticated requests are audit-logged (method/path/ip, never the key), same
+as valueTool's channel.
 
 ## Deploy (VM + PM2, same as the rest of the fleet)
 

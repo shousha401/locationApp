@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Requests · Location Feed</title>
+  <style>
+    :root {
+      --bg:#0f172a; --panel:#1e293b; --panel2:#172033; --line:#334155;
+      --text:#e2e8f0; --muted:#94a3b8; --accent:#38bdf8; --accent2:#22d3ee;
+      --good:#34d399; --warn:#fbbf24; --err:#f87171; --chip:#0b1220;
+    }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--text);
+      font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+    a { color:var(--accent); }
+    header { position:sticky; top:0; z-index:5; display:flex; align-items:center; gap:16px;
+      padding:12px 20px; background:rgba(15,23,42,.92); backdrop-filter:blur(6px);
+      border-bottom:1px solid var(--line); flex-wrap:wrap; }
+    header h1 { margin:0; font-size:16px; letter-spacing:.02em; white-space:nowrap; }
+    .grow { flex:1 1 auto; }
+    .who { font-size:12px; color:var(--muted); }
+    a.navlink { color:var(--accent); text-decoration:none; font-size:12px; }
+    button.link { background:none; border:0; color:var(--muted); cursor:pointer; font-size:12px; text-decoration:underline; }
+
+    .wrap { max-width:780px; margin:0 auto; padding:20px; }
+    .banner { margin:0 0 16px; padding:12px 14px; border-radius:9px; font-size:13px;
+      background:var(--panel2); border:1px solid var(--line); color:var(--muted); }
+    .banner b { color:var(--text); }
+
+    .msg { background:var(--panel); border:1px solid var(--line); border-radius:12px;
+      padding:12px 16px; margin-bottom:10px; }
+    .msg.done { opacity:.55; }
+    .msg.mine { border-color:#14415a; background:#0d1e33; }
+    .mhead { display:flex; align-items:center; gap:10px; margin-bottom:4px; flex-wrap:wrap; }
+    .mhead b { font-size:13px; }
+    .mtime { font-size:11px; color:var(--muted); }
+    .mtext { white-space:pre-wrap; word-break:break-word; }
+    .donechip { font-size:11px; color:var(--good); }
+    .marker { margin-left:auto; background:none; border:1px solid var(--line); color:var(--muted);
+      border-radius:7px; padding:2px 9px; font-size:11px; cursor:pointer; }
+    .marker:hover { border-color:var(--accent); color:var(--accent); }
+
+    .compose { position:sticky; bottom:0; background:var(--bg); padding:12px 0 20px; }
+    .compose textarea { width:100%; min-height:76px; resize:vertical; padding:11px 13px;
+      border-radius:10px; border:1px solid var(--line); background:var(--panel2);
+      color:var(--text); font:inherit; }
+    .compose textarea:focus { outline:none; border-color:var(--accent); }
+    .compose-actions { display:flex; justify-content:space-between; align-items:center; margin-top:8px; gap:10px; }
+    .compose-actions .tip { font-size:11px; color:var(--muted); }
+    .compose-actions button.send { padding:9px 22px; border:0; border-radius:8px; background:var(--accent);
+      color:#04222f; font-weight:700; cursor:pointer; }
+    .compose-actions button.send:disabled { opacity:.5; cursor:default; }
+    .empty { padding:40px 16px; text-align:center; color:var(--muted); }
+    .err { color:var(--err); font-size:12px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>💬 Requests</h1>
+    <div class="grow"></div>
+    <a class="navlink" href="/">📍 Feed</a>
+    <a class="navlink" href="/dashboard.html">📊 Dashboard</a>
+    <span class="who" id="who"></span>
+    <button class="link" id="logout">Sign out</button>
+  </header>
+
+  <div class="wrap">
+    <div class="banner"><b>This is the build queue for this app.</b> Write what you want it to
+      show — a number, a view, an alert, anything — and it gets read and built. Answers land
+      right here in the thread. Nothing is too small to ask for.</div>
+
+    <div id="thread"><div class="empty">Loading…</div></div>
+
+    <div class="compose">
+      <textarea id="text" placeholder="What should this app show you? Write it like you'd say it."></textarea>
+      <div class="compose-actions">
+        <span class="tip" id="tip">Posting as <b id="asWho">…</b></span>
+        <button class="send" id="send">Send</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) =>
+      ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+
+    let ME = { username: '', role: 'viewer' };
+
+    function render(messages) {
+      const isAdmin = ME.role === 'admin';
+      if (!messages.length) {
+        $('thread').innerHTML = '<div class="empty">Nothing here yet — write the first request below.</div>';
+        return;
+      }
+      $('thread').innerHTML = messages.map((m) => `
+        <div class="msg ${m.done ? 'done' : ''} ${m.author === ME.username ? 'mine' : ''}">
+          <div class="mhead">
+            <b>${esc(m.author)}</b>
+            <span class="mtime">${new Date(m.ts).toLocaleString()}</span>
+            ${m.done ? `<span class="donechip">✓ done${m.doneBy ? ' · ' + esc(m.doneBy) : ''}</span>` : ''}
+            ${isAdmin ? `<button class="marker" data-id="${m.id}" data-done="${m.done ? 0 : 1}">${m.done ? 'reopen' : 'mark done'}</button>` : ''}
+          </div>
+          <div class="mtext">${esc(m.text)}</div>
+        </div>`).join('');
+    }
+
+    async function load() {
+      try {
+        const r = await (await fetch('/api/requests')).json();
+        render(r.messages || []);
+      } catch (_) {
+        $('thread').innerHTML = '<div class="empty err">Could not load the thread. Are you still signed in?</div>';
+      }
+    }
+
+    $('thread').addEventListener('click', async (e) => {
+      const b = e.target.closest('.marker');
+      if (!b) return;
+      await fetch('/api/requests/' + b.dataset.id, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ done: b.dataset.done === '1' }),
+      });
+      load();
+    });
+
+    async function send() {
+      const text = $('text').value.trim();
+      if (!text) return;
+      const btn = $('send'); btn.disabled = true; btn.textContent = 'Sending…';
+      try {
+        const res = await fetch('/api/requests', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text }),
+        });
+        if (!res.ok) throw new Error();
+        $('text').value = '';
+        await load();
+        window.scrollTo(0, document.body.scrollHeight);
+      } catch (_) {
+        $('tip').innerHTML = '<span class="err">Could not send — try again.</span>';
+      }
+      btn.disabled = false; btn.textContent = 'Send';
+    }
+    $('send').addEventListener('click', send);
+    $('text').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) send();
+    });
+
+    $('logout').addEventListener('click', async () => {
+      await fetch('/api/logout', { method: 'POST' });
+      location.href = '/login.html';
+    });
+
+    async function init() {
+      try {
+        ME = await (await fetch('/api/session')).json();
+        $('who').textContent = ME.username;
+        $('asWho').textContent = ME.username;
+      } catch (_) { location.href = '/login.html'; return; }
+      await load();
+      // Poll for new messages; the compose box is separate, so this never clobbers a draft.
+      setInterval(load, 30000);
+    }
+    init();
+  </script>
+</body>
+</html>

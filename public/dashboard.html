@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dashboard · Location Feed</title>
+  <style>
+    :root {
+      --bg:#0f172a; --panel:#1e293b; --panel2:#172033; --line:#334155;
+      --text:#e2e8f0; --muted:#94a3b8; --accent:#38bdf8; --accent2:#22d3ee;
+      --good:#34d399; --warn:#fbbf24; --err:#f87171; --chip:#0b1220;
+    }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--text);
+      font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+    a { color:var(--accent); }
+    header { position:sticky; top:0; z-index:5; display:flex; align-items:center; gap:16px;
+      padding:12px 20px; background:rgba(15,23,42,.92); backdrop-filter:blur(6px);
+      border-bottom:1px solid var(--line); flex-wrap:wrap; }
+    header h1 { margin:0; font-size:16px; letter-spacing:.02em; white-space:nowrap; }
+    .grow { flex:1 1 auto; }
+    .status { font-size:12px; color:var(--muted); display:flex; align-items:center; gap:7px; white-space:nowrap; }
+    .dot { width:9px; height:9px; border-radius:50%; background:var(--muted); }
+    .dot.ok { background:var(--good); } .dot.warn { background:var(--warn); } .dot.err { background:var(--err); }
+    .who { font-size:12px; color:var(--muted); }
+    a.navlink { color:var(--accent); text-decoration:none; font-size:12px; }
+    button.link { background:none; border:0; color:var(--muted); cursor:pointer; font-size:12px; text-decoration:underline; }
+
+    .wrap { max-width:1180px; margin:0 auto; padding:20px; }
+    .banner { margin:0 0 16px; padding:10px 14px; border-radius:9px; font-size:13px;
+      background:var(--panel2); border:1px solid var(--line); color:var(--muted); }
+    .banner b { color:var(--text); }
+
+    .tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-bottom:20px; }
+    .tile { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px 16px; }
+    .tile b { display:block; font-size:24px; line-height:1.2; }
+    .tile span { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.05em; }
+
+    .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:20px; align-items:start; margin-bottom:20px; }
+    @media (max-width:900px){ .grid2 { grid-template-columns:1fr; } }
+
+    .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; overflow:hidden; margin-bottom:20px; }
+    .card h2 { margin:0; padding:13px 16px; font-size:13px; text-transform:uppercase; letter-spacing:.06em;
+      color:var(--muted); border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center; gap:8px; }
+    .card .scroll { overflow-x:auto; }
+    table { width:100%; border-collapse:collapse; }
+    th, td { text-align:left; padding:8px 12px; border-bottom:1px solid var(--line); vertical-align:top; white-space:nowrap; }
+    th { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); }
+    td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; }
+    tr:hover td { background:rgba(56,189,248,.05); }
+    tr.click { cursor:pointer; }
+    .mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+    .desc { color:var(--muted); white-space:normal; }
+    .chip { display:inline-block; padding:1px 7px; border-radius:6px; font-size:11px; margin:1px 3px 1px 0;
+      background:var(--chip); border:1px solid var(--line); white-space:nowrap; }
+    .chip.FRESH { color:var(--good); border-color:#14563f; }
+    .chip.DRY { color:var(--warn); border-color:#5a4514; }
+    .chip.FROZEN { color:var(--accent2); border-color:#14415a; }
+    .chip.TEMP { color:#c4b5fd; border-color:#3b3160; }
+    .age-old { color:var(--warn); }
+    .empty { padding:40px 16px; text-align:center; color:var(--muted); }
+    .filter { padding:10px 16px; border-bottom:1px solid var(--line); background:var(--panel2); }
+    .filter input { width:100%; max-width:340px; padding:9px 12px; font-size:14px;
+      border-radius:8px; border:1px solid var(--line); background:var(--bg); color:var(--text); }
+    .filter input:focus { outline:none; border-color:var(--accent); }
+    .zones { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:9px; }
+    .zbtn { padding:5px 13px; border-radius:999px; border:1px solid var(--line);
+      background:var(--bg); color:var(--muted); cursor:pointer; font-size:12px; white-space:nowrap; }
+    .zbtn:hover { border-color:var(--accent); color:var(--accent); }
+    .zbtn.on { border-color:var(--accent); color:var(--accent); box-shadow:inset 0 0 0 1px var(--accent); }
+    .selsum { font-size:12px; color:var(--muted); margin-top:8px; }
+    .selsum b { color:var(--text); }
+    .count { font-size:11px; color:var(--muted); text-transform:none; letter-spacing:0; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>📊 Dashboard</h1>
+    <div class="status"><span class="dot" id="dot"></span><span id="statusText">loading…</span></div>
+    <div class="grow"></div>
+    <a class="navlink" href="/">📍 Feed</a>
+    <a class="navlink" href="/requests.html">💬 Requests</a>
+    <span class="who" id="who"></span>
+    <button class="link" id="logout">Sign out</button>
+  </header>
+
+  <div class="wrap">
+    <div class="banner">This is <b>v1</b>, built from everything the snapshot already carries.
+      Missing the number you actually need? Say so on the <a href="/requests.html">💬 Requests</a> page and it gets built.</div>
+
+    <div class="tiles" id="tiles"></div>
+
+    <div class="grid2">
+      <div class="card">
+        <h2>State mix <span class="count">frozen → temp pipeline</span></h2>
+        <div class="scroll"><table id="states"></table></div>
+      </div>
+      <div class="card">
+        <h2>Biggest products <span class="count">by pallets on hand</span></h2>
+        <div class="scroll"><table id="products"></table></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Oldest inventory <span class="count">longest-sitting pallets</span></h2>
+      <div class="scroll"><table id="oldest"></table></div>
+    </div>
+
+    <div class="card">
+      <h2>All locations <span class="count" id="locCount"></span></h2>
+      <div class="filter">
+        <div class="zones" id="zones"></div>
+        <input id="locFilter" placeholder="Filter locations — e.g. Z2" autocomplete="off">
+        <div class="selsum" id="selSum"></div>
+      </div>
+      <div class="scroll"><table id="locs"></table></div>
+    </div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) =>
+      ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+    const fmtInt = (n) => Math.round(n).toLocaleString();
+    const fmtQty = (n) => (Math.abs(n % 1) < 1e-9 ? Math.round(n).toLocaleString()
+      : n.toLocaleString(undefined, { maximumFractionDigits: 2 }));
+    const wStr = (w) => (w && w.length ? w.map((x) => `${fmtQty(x.qty)} ${esc(x.uom)}`).join(' · ') : '—');
+    const chips = (states) => (states || []).map((s) => `<span class="chip ${esc(s)}">${esc(s)}</span>`).join('');
+    function daysSince(dateStr) {
+      if (!dateStr) return null;
+      const d = new Date(String(dateStr).length <= 10 ? dateStr + 'T00:00:00' : dateStr);
+      if (isNaN(d)) return null;
+      return Math.floor((Date.now() - d.getTime()) / 86400000);
+    }
+    const ageCell = (d) => {
+      if (!d) return '—';
+      const days = daysSince(d);
+      const cls = days != null && days > 180 ? 'age-old' : '';
+      return `<span class="${cls}">${esc(d)}${days != null ? ` (${fmtInt(days)}d)` : ''}</span>`;
+    };
+
+    let LOCS = []; // the full per-location list, filtered client-side
+
+    // One-tap zone buttons, derived from the codes themselves (GT.2 → GT.2.Z1 …)
+    // so new zones show up on their own. A chip just fills the filter box.
+    function renderZones() {
+      const two = new Set(), three = new Set();
+      for (const l of LOCS) {
+        const p = l.code.split('.');
+        if (p.length >= 2) two.add(p.slice(0, 2).join('.'));
+        if (p.length >= 3) three.add(p.slice(0, 3).join('.'));
+      }
+      // Only offer the 2-segment level when there's more than one (GT.2 alone = "All").
+      const prefixes = [...(two.size > 1 ? [...two].sort() : []), ...[...three].sort()];
+      const q = $('locFilter').value.trim().toUpperCase();
+      $('zones').innerHTML =
+        `<button class="zbtn ${q === '' ? 'on' : ''}" data-z="">All</button>` +
+        prefixes.map((z) => `<button class="zbtn ${q === z ? 'on' : ''}" data-z="${esc(z)}">${esc(z)}</button>`).join('');
+    }
+    $('zones').addEventListener('click', (e) => {
+      const b = e.target.closest('.zbtn');
+      if (!b) return;
+      $('locFilter').value = b.dataset.z;
+      renderZones(); renderLocations();
+    });
+
+    function renderLocations() {
+      const q = $('locFilter').value.trim().toUpperCase();
+      const rows = q ? LOCS.filter((l) => l.code.toUpperCase().includes(q)) : LOCS;
+      $('locCount').textContent = `${fmtInt(rows.length)} of ${fmtInt(LOCS.length)} with stock`;
+
+      // Totals for the current selection — tap Z1 and read off the whole zone.
+      let pallets = 0, units = 0; const weight = new Map();
+      for (const l of rows) {
+        pallets += l.pallets; units += l.units;
+        for (const w of l.weight || []) weight.set(w.uom, (weight.get(w.uom) || 0) + w.qty);
+      }
+      $('selSum').innerHTML = rows.length
+        ? `Selection: <b>${fmtInt(rows.length)}</b> locations · <b>${fmtInt(pallets)}</b> pallets · <b>${fmtInt(units)}</b> units · <b>${wStr([...weight.entries()].map(([uom, qty]) => ({ uom, qty })))}</b>`
+        : 'Nothing matches that filter.';
+      $('locs').innerHTML = `
+        <thead><tr><th>Location</th><th class="num">Products</th><th class="num">Pallets</th>
+          <th class="num">Units</th><th class="num">Weight</th><th>States</th><th>Oldest</th></tr></thead>
+        <tbody>${rows.map((l) => `
+          <tr class="click" data-loc="${esc(l.code)}">
+            <td class="mono"><a href="/?loc=${encodeURIComponent(l.code)}">${esc(l.code)}</a></td>
+            <td class="num">${fmtInt(l.products)}</td>
+            <td class="num">${fmtInt(l.pallets)}</td>
+            <td class="num">${fmtInt(l.units)}</td>
+            <td class="num">${wStr(l.weight)}</td>
+            <td>${chips(l.states)}</td>
+            <td>${ageCell(l.oldest)}</td>
+          </tr>`).join('')}</tbody>`;
+    }
+    // Whole-row click → the feed page on that bin (the link inside works too).
+    $('locs').addEventListener('click', (e) => {
+      const tr = e.target.closest('tr.click');
+      if (tr && !e.target.closest('a')) location.href = '/?loc=' + encodeURIComponent(tr.dataset.loc);
+    });
+    $('locFilter').addEventListener('input', () => { renderZones(); renderLocations(); });
+
+    async function load() {
+      let o;
+      try { o = await (await fetch('/api/overview')).json(); }
+      catch (_) { $('dot').className = 'dot err'; $('statusText').textContent = 'offline'; return; }
+
+      const dot = $('dot'), txt = $('statusText');
+      dot.className = 'dot ' + (o.ok ? 'ok' : 'warn');
+      const when = o.builtAt ? new Date(o.builtAt) : null;
+      txt.textContent = o.ok
+        ? `${o.prefix ? esc(o.prefix) + ' · ' : ''}as of ${when ? when.toLocaleTimeString() : '—'}`
+        : 'building first snapshot…';
+      if (!o.ok) return;
+
+      $('tiles').innerHTML = [
+        [fmtInt(o.totals.products), 'Products'],
+        [fmtInt(o.totals.pallets), 'Pallets'],
+        [fmtInt(o.totals.units), 'Units'],
+        [fmtInt(o.totals.locations), 'Locations w/ stock'],
+        [wStr(o.totals.weight), 'Total weight'],
+      ].map(([b, s]) => `<div class="tile"><b>${b}</b><span>${s}</span></div>`).join('');
+
+      $('states').innerHTML = `
+        <thead><tr><th>State</th><th class="num">Pallets</th><th class="num">Units</th><th class="num">Weight</th></tr></thead>
+        <tbody>${o.states.map((s) => `
+          <tr><td><span class="chip ${esc(s.state)}">${esc(s.state)}</span></td>
+          <td class="num">${fmtInt(s.pallets)}</td><td class="num">${fmtInt(s.units)}</td>
+          <td class="num">${wStr(s.weight)}</td></tr>`).join('')}</tbody>`;
+
+      $('products').innerHTML = `
+        <thead><tr><th>Item</th><th class="num">Pallets</th><th class="num">Units</th><th class="num">Weight</th></tr></thead>
+        <tbody>${o.topProducts.map((p) => `
+          <tr><td><span class="mono">${esc(p.item)}</span><div class="desc">${esc(p.description)}</div></td>
+          <td class="num">${fmtInt(p.pallets)}</td><td class="num">${fmtInt(p.units)}</td>
+          <td class="num">${wStr(p.weight)}</td></tr>`).join('')}</tbody>`;
+
+      $('oldest').innerHTML = `
+        <thead><tr><th>Pallet</th><th>Item</th><th>Location</th><th>Received</th><th>State</th><th class="num">Weight</th></tr></thead>
+        <tbody>${o.oldestPallets.map((p) => `
+          <tr><td class="mono">${esc(p.pallet) || '—'}</td>
+          <td><span class="mono">${esc(p.item)}</span><div class="desc">${esc(p.description)}</div></td>
+          <td class="mono"><a href="/?loc=${encodeURIComponent(p.location)}">${esc(p.location)}</a></td>
+          <td>${ageCell(p.date)}</td>
+          <td>${p.state ? `<span class="chip ${esc(p.state)}">${esc(p.state)}</span>` : '—'}${p.stateDate ? `<div class="desc" style="font-size:10px">since ${esc(p.stateDate)}</div>` : ''}</td>
+          <td class="num">${wStr(p.weight)}</td></tr>`).join('')}</tbody>`;
+
+      LOCS = o.locations || [];
+      renderZones();
+      renderLocations();
+    }
+
+    $('logout').addEventListener('click', async () => {
+      await fetch('/api/logout', { method: 'POST' });
+      location.href = '/login.html';
+    });
+
+    async function init() {
+      try {
+        const me = await (await fetch('/api/session')).json();
+        $('who').textContent = me.username;
+      } catch (_) { location.href = '/login.html'; return; }
+      await load();
+      setInterval(load, 60000);
+    }
+    init();
+  </script>
+</body>
+</html>

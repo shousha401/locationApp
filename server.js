@@ -9,6 +9,7 @@ const auth = require('./backend/auth');
 const users = require('./backend/users');
 const inventory = require('./backend/inventory');
 const notes = require('./backend/notes');
+const requests = require('./backend/requests');
 
 const app = express();
 app.use(express.json({ limit: '256kb' }));
@@ -47,6 +48,36 @@ app.get('/api/location/:code', (req, res) => {
 app.get('/api/notes/:code', (req, res) => res.json(notes.get(req.params.code)));
 app.put('/api/notes/:code', auth.requireEditor, (req, res) => {
   res.json(notes.set(req.params.code, req.body || {}, req.user.username));
+});
+
+// Whole-snapshot aggregates for the dashboard. Served from RAM — costs Swarmbox nothing.
+app.get('/api/overview', (_req, res) => res.json(inventory.overview()));
+
+// ── Build-requests channel ───────────────────────────────────────────────────
+// The app's feedback loop: any signed-in user (viewers included — that's Clay)
+// writes what they want the app to show; the build side reads the thread and
+// answers in it, either signed in as admin or over the X-Api-Key lane (auth.js).
+app.get('/api/requests', (_req, res) => res.json({ messages: requests.list() }));
+
+app.post('/api/requests', (req, res) => {
+  const text = String((req.body && req.body.text) || '').trim();
+  if (!text) return res.status(400).json({ error: 'Write something first' });
+  if (text.length > requests.MAX_LEN) {
+    return res.status(400).json({ error: `Keep it under ${requests.MAX_LEN} characters` });
+  }
+  // Key-authenticated posts may label themselves (e.g. 'eslam'); session posts
+  // are always attributed to the session user.
+  const author = req.user.username === 'api' && req.body && req.body.author
+    ? String(req.body.author).slice(0, 40) : req.user.username;
+  const msg = requests.add(author, text);
+  console.log(`[Requests] #${msg.id} from ${author}: ${text.slice(0, 80)}`);
+  res.json(msg);
+});
+
+app.patch('/api/requests/:id', auth.requireAdmin, (req, res) => {
+  const msg = requests.setDone(req.params.id, !!(req.body && req.body.done), req.user.username);
+  if (!msg) return res.status(404).json({ error: 'No such message' });
+  res.json(msg);
 });
 
 // ── User management (admin only) ─────────────────────────────────────────────

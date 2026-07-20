@@ -113,6 +113,7 @@
     .units tr:last-child td { border-bottom:0; }
     .units tr:hover td { background:rgba(56,189,248,.05); }
     .serial { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:16px; letter-spacing:.04em; }
+    .since { font-size:10px; color:var(--muted); margin-top:2px; }
     .idx { color:var(--muted); font-size:11px; width:28px; }
     .bcode { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:10px; color:var(--muted);
       max-width:210px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
@@ -144,6 +145,8 @@
     <h1>📍 Location Feed</h1>
     <div class="status"><span class="dot" id="dot"></span><span id="statusText">connecting…</span></div>
     <div class="grow"></div>
+    <a class="navlink" href="/dashboard.html">📊 Dashboard</a>
+    <a class="navlink" href="/requests.html">💬 Requests</a>
     <a class="navlink hidden" id="usersLink" href="/users.html">👥 Users</a>
     <span class="who" id="who"></span>
     <button class="link" id="logout">Sign out</button>
@@ -189,7 +192,8 @@
 
     function daysSince(dateStr) {
       if (!dateStr) return null;
-      const d = new Date(dateStr + 'T00:00:00');
+      // Swarmbox dates are usually bare YYYY-MM-DD; tolerate full timestamps too.
+      const d = new Date(String(dateStr).length <= 10 ? dateStr + 'T00:00:00' : dateStr);
       if (isNaN(d)) return null;
       return Math.floor((Date.now() - d.getTime()) / 86400000);
     }
@@ -352,6 +356,12 @@
         return `<span class="${cls}">${esc(d)}${days != null ? ` (${fmtInt(days)}d)` : ''}</span>`;
       };
       const packCell = (q, u) => (q ? `${fmtQty(q)} <span class="desc">${esc(u || '')}</span>` : '—');
+      // Per-unit state with the date it ENTERED that state — for a TEMP unit,
+      // "since" is exactly when it stopped being frozen (Clay's ask).
+      const stateCell = (u) => (u.state
+        ? `<span class="chip ${esc(u.state)}">${esc(u.state)}</span>` +
+          (u.stateDate ? `<div class="since">since ${esc(u.stateDate)}</div>` : '')
+        : '—');
 
       // Group by pallet + product (a pallet usually holds one product, but don't assume).
       const groups = new Map();
@@ -397,7 +407,7 @@
             </div>
             <table class="units">
               <thead><tr>
-                <th></th><th>Serial</th><th>Pack</th><th>Quantity</th>${hasLean ? '<th>Lean</th>' : ''}<th>Barcode</th>
+                <th></th><th>Serial</th><th>Pack</th><th>Quantity</th>${hasLean ? '<th>Lean</th>' : ''}<th>State</th><th>Received</th><th>Barcode</th>
               </tr></thead>
               <tbody>
                 ${g.units.map((u, i) => `
@@ -407,6 +417,8 @@
                     <td>${packCell(u.baseQty, u.baseUom)}</td>
                     <td>${packCell(u.varQty, u.varUom)}</td>
                     ${hasLean ? `<td>${lean(u.lean)}</td>` : ''}
+                    <td>${stateCell(u)}</td>
+                    <td>${ageCell(u.date)}</td>
                     <td>${u.barcode
                       ? `<button class="scan" data-kind="Unit barcode" data-bc="${esc(u.barcode)}">▌▌</button>
                          <span class="bcode" title="${esc(u.barcode)}">${esc(u.barcode)}</span>`
@@ -505,6 +517,10 @@
 
       await refreshStatus();
       updateSuggestions('');
+
+      // Deep link from the dashboard: /?loc=GT.2.Z2.C03 opens straight on that bin.
+      const want = new URLSearchParams(location.search).get('loc');
+      if (want) { $('loc').value = want; loadLocation(want); }
 
       // Auto-refresh: status every 15s; the open location every 30s (silent, and
       // never while the editor has unsaved note edits).
