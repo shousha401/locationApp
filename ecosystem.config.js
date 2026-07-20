@@ -9,6 +9,11 @@ module.exports = {
   apps: [{
     name: 'locationApp',
     script: './server.js',
+    // fork + a single instance on purpose: sessions AND the inventory snapshot live
+    // in this process's memory. Under cluster with >1 instance each worker would hold
+    // its own snapshot and its own session table, so logins would randomly "expire"
+    // as requests landed on different workers.
+    exec_mode: 'fork',
     instances: 1,
     autorestart: true,
     watch: false,
