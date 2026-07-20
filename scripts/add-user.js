@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // add-user.js — create or update a login.
-//   node scripts/add-user.js <username> <password> [viewer|editor]
+//   node scripts/add-user.js <username> <password> [viewer|editor|admin]
 //   node scripts/add-user.js --list
 //   node scripts/add-user.js --remove <username>
 //
@@ -26,7 +26,7 @@ if (a === '--remove') {
 }
 
 if (!a || !b) {
-  console.error('Usage: node scripts/add-user.js <username> <password> [viewer|editor]');
+  console.error('Usage: node scripts/add-user.js <username> <password> [viewer|editor|admin]');
   console.error('       node scripts/add-user.js --list');
   console.error('       node scripts/add-user.js --remove <username>');
   process.exit(1);

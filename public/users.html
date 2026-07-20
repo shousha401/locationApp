@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Users · Location Feed</title>
+  <style>
+    :root {
+      --bg:#0f172a; --panel:#1e293b; --panel2:#172033; --line:#334155;
+      --text:#e2e8f0; --muted:#94a3b8; --accent:#38bdf8;
+      --good:#34d399; --warn:#fbbf24; --err:#f87171;
+    }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--text);
+      font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+    a { color:var(--accent); text-decoration:none; }
+    header { display:flex; align-items:center; gap:16px; padding:12px 20px;
+      border-bottom:1px solid var(--line); flex-wrap:wrap; }
+    header h1 { margin:0; font-size:16px; white-space:nowrap; }
+    .grow { flex:1 1 auto; }
+    .who { font-size:12px; color:var(--muted); }
+    .badge { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px;
+      font-weight:700; text-transform:uppercase; letter-spacing:.05em; }
+    .badge.admin  { background:#3b2a0b; color:var(--warn); border:1px solid #5a4514; }
+    .badge.editor { background:#0e3b2e; color:var(--good); border:1px solid #14563f; }
+    .badge.viewer { background:#0b2a3b; color:var(--accent); border:1px solid #14415a; }
+    button.link { background:none; border:0; color:var(--muted); cursor:pointer;
+      font-size:12px; text-decoration:underline; }
+
+    .wrap { max-width:900px; margin:0 auto; padding:22px 20px 60px; }
+    .card { background:var(--panel); border:1px solid var(--line); border-radius:12px;
+      overflow:hidden; margin-bottom:22px; }
+    .card h2 { margin:0; padding:13px 16px; font-size:13px; text-transform:uppercase;
+      letter-spacing:.06em; color:var(--muted); border-bottom:1px solid var(--line); }
+    .body { padding:16px; }
+
+    label { display:block; font-size:11px; color:var(--muted); margin-bottom:5px;
+      text-transform:uppercase; letter-spacing:.05em; }
+    input, select { padding:9px 10px; border-radius:8px; border:1px solid var(--line);
+      background:var(--panel2); color:var(--text); font:inherit; width:100%; }
+    input:focus, select:focus { outline:none; border-color:var(--accent); }
+    .row { display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end; }
+    .row > div { flex:1 1 150px; }
+    button.primary { padding:9px 18px; border:0; border-radius:8px; background:var(--accent);
+      color:#04222f; font-weight:700; cursor:pointer; white-space:nowrap; }
+    button.primary:disabled { opacity:.5; cursor:default; }
+    button.danger { padding:6px 12px; border:1px solid #5a1414; border-radius:7px;
+      background:#3b0f0f; color:var(--err); cursor:pointer; font-size:12px; }
+    button.small { padding:6px 12px; border:1px solid var(--line); border-radius:7px;
+      background:var(--panel2); color:var(--text); cursor:pointer; font-size:12px; }
+
+    table { width:100%; border-collapse:collapse; }
+    th, td { text-align:left; padding:10px 12px; border-bottom:1px solid var(--line); vertical-align:middle; }
+    th { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); }
+    td.actions { white-space:nowrap; }
+    td .inline { display:flex; gap:6px; align-items:center; }
+    td .inline input { width:130px; }
+    select.role { width:auto; padding:5px 8px; font-size:12px; }
+    .me { font-size:10px; color:var(--muted); margin-left:6px; }
+
+    .msg { margin:0 0 16px; padding:10px 14px; border-radius:9px; font-size:13px; display:none; }
+    .msg.ok  { display:block; background:#0e3b2e; color:var(--good); border:1px solid #14563f; }
+    .msg.err { display:block; background:#3b0f0f; color:var(--err); border:1px solid #5a1414; }
+    .hint { font-size:12px; color:var(--muted); margin-top:10px; }
+    .denied { padding:60px 20px; text-align:center; color:var(--muted); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>👥 Users</h1>
+    <a href="/">← Back to feed</a>
+    <div class="grow"></div>
+    <span class="who" id="who"></span>
+    <button class="link" id="logout">Sign out</button>
+  </header>
+
+  <div class="wrap" id="wrap">
+    <div class="msg" id="msg"></div>
+
+    <div class="card">
+      <h2>Add a user</h2>
+      <div class="body">
+        <div class="row">
+          <div>
+            <label for="nu">Username</label>
+            <input id="nu" autocomplete="off" spellcheck="false" placeholder="e.g. mike">
+          </div>
+          <div>
+            <label for="np">Password</label>
+            <input id="np" type="text" autocomplete="new-password" placeholder="at least 4 characters">
+          </div>
+          <div style="flex:0 0 130px">
+            <label for="nr">Role</label>
+            <select id="nr">
+              <option value="viewer">viewer</option>
+              <option value="editor">editor</option>
+              <option value="admin">admin</option>
+            </select>
+          </div>
+          <div style="flex:0 0 auto"><button class="primary" id="add">Create user</button></div>
+        </div>
+        <div class="hint">
+          <b>viewer</b> — search locations, read notes &amp; flags ·
+          <b>editor</b> — viewer + edit notes &amp; flags ·
+          <b>admin</b> — editor + manage users
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Existing users</h2>
+      <div style="overflow-x:auto"><table>
+        <thead><tr><th>User</th><th>Role</th><th>Reset password</th><th>Last change</th><th></th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table></div>
+    </div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) =>
+      ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+    let ME = { username:'', role:'viewer' };
+    let ROLES = ['viewer','editor','admin'];
+
+    function flash(text, ok) {
+      const m = $('msg');
+      m.className = 'msg ' + (ok ? 'ok' : 'err');
+      m.textContent = text;
+      clearTimeout(flash._t);
+      flash._t = setTimeout(() => { m.className = 'msg'; }, 4000);
+    }
+
+    async function api(method, url, body) {
+      const res = await fetch(url, {
+        method,
+        headers: body ? { 'Content-Type': 'application/json' } : undefined,
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || `${method} failed (${res.status})`);
+      return json;
+    }
+
+    function render(users) {
+      $('rows').innerHTML = users.map((u) => {
+        const isMe = u.username === ME.username;
+        const opts = ROLES.map((r) =>
+          `<option value="${r}" ${u.role === r ? 'selected' : ''}>${r}</option>`).join('');
+        const when = u.updatedAt ? new Date(u.updatedAt).toLocaleString() : '—';
+        return `
+          <tr data-user="${esc(u.username)}">
+            <td><b>${esc(u.username)}</b>${isMe ? '<span class="me">(you)</span>' : ''}</td>
+            <td>
+              <select class="role" data-act="role">${opts}</select>
+              <span class="badge ${esc(u.role)}" style="margin-left:6px">${esc(u.role)}</span>
+            </td>
+            <td><div class="inline">
+              <input type="text" placeholder="new password" data-act="pw">
+              <button class="small" data-act="setpw">Set</button>
+            </div></td>
+            <td style="font-size:12px;color:var(--muted)">${esc(when)}</td>
+            <td class="actions"><button class="danger" data-act="remove">Remove</button></td>
+          </tr>`;
+      }).join('');
+    }
+
+    async function load() {
+      const data = await api('GET', '/api/users');
+      ROLES = data.roles || ROLES;
+      render(data.users || []);
+    }
+
+    // One delegated handler for the whole table.
+    $('rows').addEventListener('click', async (e) => {
+      const btn = e.target.closest('button');
+      if (!btn) return;
+      const tr = btn.closest('tr');
+      const user = tr.dataset.user;
+      try {
+        if (btn.dataset.act === 'remove') {
+          if (!confirm(`Remove user "${user}"? They will be signed out immediately.`)) return;
+          await api('DELETE', '/api/users/' + encodeURIComponent(user));
+          flash(`Removed ${user}.`, true);
+          if (user === ME.username) { location.href = '/login.html'; return; }
+        } else if (btn.dataset.act === 'setpw') {
+          const input = tr.querySelector('[data-act="pw"]');
+          const pw = input.value;
+          if (!pw || pw.length < 4) { flash('Password must be at least 4 characters.', false); return; }
+          await api('PATCH', '/api/users/' + encodeURIComponent(user), { password: pw });
+          input.value = '';
+          flash(`Password reset for ${user}. They must sign in again.`, true);
+          if (user === ME.username) { location.href = '/login.html'; return; }
+        }
+        await load();
+      } catch (err) { flash(err.message, false); await load(); }
+    });
+
+    $('rows').addEventListener('change', async (e) => {
+      const sel = e.target.closest('select[data-act="role"]');
+      if (!sel) return;
+      const tr = sel.closest('tr');
+      const user = tr.dataset.user;
+      try {
+        await api('PATCH', '/api/users/' + encodeURIComponent(user), { role: sel.value });
+        flash(`${user} is now ${sel.value}. They must sign in again.`, true);
+        if (user === ME.username) { location.href = '/login.html'; return; }
+        await load();
+      } catch (err) { flash(err.message, false); await load(); }
+    });
+
+    $('add').addEventListener('click', async () => {
+      const username = $('nu').value.trim();
+      const password = $('np').value;
+      const role = $('nr').value;
+      const btn = $('add'); btn.disabled = true;
+      try {
+        await api('POST', '/api/users', { username, password, role });
+        $('nu').value = ''; $('np').value = '';
+        flash(`Created ${username} (${role}).`, true);
+        await load();
+      } catch (err) { flash(err.message, false); }
+      btn.disabled = false;
+    });
+
+    $('logout').addEventListener('click', async () => {
+      await fetch('/api/logout', { method: 'POST' });
+      location.href = '/login.html';
+    });
+
+    (async function init() {
+      try {
+        ME = await (await fetch('/api/session')).json();
+      } catch (_) { location.href = '/login.html'; return; }
+      $('who').innerHTML = `${esc(ME.username)} <span class="badge ${esc(ME.role)}">${esc(ME.role)}</span>`;
+      if (ME.role !== 'admin') {
+        $('wrap').innerHTML = '<div class="denied">Only admins can manage users.<br><a href="/">← Back to the feed</a></div>';
+        return;
+      }
+      try { await load(); } catch (err) { flash(err.message, false); }
+    })();
+  </script>
+</body>
+</html>

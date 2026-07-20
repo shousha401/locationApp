@@ -13,7 +13,10 @@ const path = require('path');
 const crypto = require('crypto');
 
 const FILE = path.join(__dirname, '..', 'data', 'users.json');
-const ROLES = new Set(['viewer', 'editor']);
+// viewer < editor < admin. admin adds user management (create people, set and
+// reset their passwords, change roles, revoke access) on top of everything an
+// editor can do. Rank comparison lives in auth.js.
+const ROLES = new Set(['viewer', 'editor', 'admin']);
 
 function load() {
   try {
@@ -76,4 +79,40 @@ function remove(username) {
   return true;
 }
 
-module.exports = { upsert, verify, list, remove, ROLES: [...ROLES] };
+// Change someone's role WITHOUT touching their password.
+function setRole(username, role) {
+  username = normUser(username);
+  const all = load();
+  const u = all.find((x) => x.username === username);
+  if (!u) return null;
+  u.role = normRole(role);
+  u.updatedAt = new Date().toISOString();
+  persist(all);
+  return { username: u.username, role: u.role, updatedAt: u.updatedAt };
+}
+
+// Reset someone's password WITHOUT touching their role. New salt every time.
+function setPassword(username, password) {
+  username = normUser(username);
+  if (!password) throw new Error('password required');
+  const all = load();
+  const u = all.find((x) => x.username === username);
+  if (!u) return null;
+  u.salt = crypto.randomBytes(16).toString('hex');
+  u.hash = hash(password, u.salt);
+  u.updatedAt = new Date().toISOString();
+  persist(all);
+  return { username: u.username, role: normRole(u.role), updatedAt: u.updatedAt };
+}
+
+const exists = (username) => load().some((u) => u.username === normUser(username));
+const get = (username) => list().find((u) => u.username === normUser(username)) || null;
+// Used to refuse deleting/demoting the last admin — otherwise nobody could manage
+// users from the app again (only the CLI on the host).
+const countAdmins = () => load().filter((u) => normRole(u.role) === 'admin').length;
+
+module.exports = {
+  upsert, verify, list, remove,
+  setRole, setPassword, exists, get, countAdmins,
+  ROLES: [...ROLES],
+};

@@ -84,10 +84,34 @@ function logout(req, res) {
   res.json({ ok: true });
 }
 
-// Route guard: only editors may pass. Mount AFTER `middleware`, so req.user is set.
-function requireEditor(req, res, next) {
-  if (req.user && req.user.role === 'editor') return next();
-  return res.status(403).json({ error: 'editor role required' });
+// Roles are ranked, so a guard means "at least this role": an admin passes every
+// editor-gated route without needing to be listed everywhere.
+const RANK = { viewer: 0, editor: 1, admin: 2 };
+const rankOf = (role) => (RANK[role] == null ? 0 : RANK[role]);
+
+// Route guard factory. Mount AFTER `middleware`, so req.user is set.
+function requireRole(min) {
+  return (req, res, next) => {
+    if (req.user && rankOf(req.user.role) >= rankOf(min)) return next();
+    return res.status(403).json({ error: `${min} role required` });
+  };
+}
+const requireEditor = requireRole('editor');
+const requireAdmin = requireRole('admin');
+
+// Drop every session belonging to a user. Without this, "take away access" would
+// be a lie: a removed or demoted user's cookie would keep working — with their OLD
+// role, since the session caches it — until the 12h sliding expiry ran out.
+function revokeUser(username) {
+  const u = String(username || '').trim().toLowerCase();
+  let killed = 0;
+  for (const [token, s] of sessions) {
+    if (s.username === u) { sessions.delete(token); killed++; }
+  }
+  return killed;
 }
 
-module.exports = { middleware, login, logout, requireEditor, currentUser };
+module.exports = {
+  middleware, login, logout, currentUser,
+  requireRole, requireEditor, requireAdmin, revokeUser,
+};

@@ -43,10 +43,77 @@ app.get('/api/location/:code', (req, res) => {
   res.json({ ...loc, note: notes.get(loc.code) });
 });
 
-// Notes: any logged-in user may read; only editors may write.
+// Notes: any logged-in user may read; editors and admins may write.
 app.get('/api/notes/:code', (req, res) => res.json(notes.get(req.params.code)));
 app.put('/api/notes/:code', auth.requireEditor, (req, res) => {
   res.json(notes.set(req.params.code, req.body || {}, req.user.username));
+});
+
+// ── User management (admin only) ─────────────────────────────────────────────
+// Admins add people, set and reset passwords, change roles, and revoke access.
+// Two invariants worth stating out loud:
+//   1. The last admin can't be deleted or demoted — user management exists only
+//      here and in the host CLI, so losing every admin would strand the app.
+//   2. Any change to a user revokes their live sessions immediately, so removing
+//      or demoting someone takes effect now rather than whenever their cookie
+//      happens to expire.
+const ROLE_LIST = ['viewer', 'editor', 'admin'];
+const validRole = (r) => ROLE_LIST.includes(r);
+const cleanName = (s) => String(s || '').trim().toLowerCase();
+const badPassword = (p) => !p || String(p).length < 4;
+
+app.get('/api/users', auth.requireAdmin, (_req, res) => {
+  res.json({ users: users.list(), roles: ROLE_LIST });
+});
+
+app.post('/api/users', auth.requireAdmin, (req, res) => {
+  const { username, password, role } = req.body || {};
+  const name = cleanName(username);
+  if (!name) return res.status(400).json({ error: 'Username is required' });
+  if (badPassword(password)) return res.status(400).json({ error: 'Password must be at least 4 characters' });
+  if (!validRole(role)) return res.status(400).json({ error: 'Role must be viewer, editor or admin' });
+  if (users.exists(name)) return res.status(409).json({ error: `User '${name}' already exists` });
+  const rec = users.upsert(name, password, role);
+  console.log(`[Users] ${req.user.username} created '${rec.username}' (${rec.role})`);
+  res.json(rec);
+});
+
+app.patch('/api/users/:username', auth.requireAdmin, (req, res) => {
+  const name = cleanName(req.params.username);
+  const current = users.get(name);
+  if (!current) return res.status(404).json({ error: 'No such user' });
+  const { password, role } = req.body || {};
+  let rec = null;
+
+  if (role !== undefined) {
+    if (!validRole(role)) return res.status(400).json({ error: 'Role must be viewer, editor or admin' });
+    if (current.role === 'admin' && role !== 'admin' && users.countAdmins() === 1) {
+      return res.status(409).json({ error: 'Cannot demote the last admin' });
+    }
+    rec = users.setRole(name, role);
+  }
+  if (password !== undefined) {
+    if (badPassword(password)) return res.status(400).json({ error: 'Password must be at least 4 characters' });
+    rec = users.setPassword(name, password);
+  }
+  if (!rec) return res.status(400).json({ error: 'Nothing to update' });
+
+  const killed = auth.revokeUser(name);
+  console.log(`[Users] ${req.user.username} updated '${name}' — ${killed} session(s) revoked`);
+  res.json(rec);
+});
+
+app.delete('/api/users/:username', auth.requireAdmin, (req, res) => {
+  const name = cleanName(req.params.username);
+  const current = users.get(name);
+  if (!current) return res.status(404).json({ error: 'No such user' });
+  if (current.role === 'admin' && users.countAdmins() === 1) {
+    return res.status(409).json({ error: 'Cannot remove the last admin' });
+  }
+  users.remove(name);
+  const killed = auth.revokeUser(name);
+  console.log(`[Users] ${req.user.username} removed '${name}' — ${killed} session(s) revoked`);
+  res.json({ ok: true, removed: name });
 });
 
 const PUBLIC_DIR = path.join(__dirname, 'public');

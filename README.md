@@ -40,13 +40,34 @@ The first inventory pull takes ~20s; the page shows a "building…" state until 
 
 ## Roles
 
-| Role     | Can do                                                       |
-|----------|-------------------------------------------------------------|
-| `viewer` | Search locations, see contents and notes/flags (read-only). |
-| `editor` | Everything a viewer can, **plus** edit notes and flags.     |
+Roles are ranked — `admin` ⊇ `editor` ⊇ `viewer`.
+
+| Role     | Can do                                                                   |
+|----------|--------------------------------------------------------------------------|
+| `viewer` | Search locations, see contents and notes/flags (read-only).              |
+| `editor` | Everything a viewer can, **plus** edit notes and flags.                  |
+| `admin`  | Everything an editor can, **plus** manage users at **`/users.html`**.    |
+
+Admins get a **👥 Users** link in the header: add people, set and reset their
+passwords, change roles, and remove access — no CLI or server login needed.
+
+Two deliberate guardrails:
+
+- **Changes revoke sessions immediately.** Removing someone, changing their role,
+  or resetting their password kills their live session on the spot, instead of
+  leaving their cookie valid until the 12h expiry.
+- **The last admin is protected.** The app refuses to delete or demote the final
+  admin, so it's impossible to lock yourself out of user management from the UI.
+
+The CLI still works (useful for bootstrapping the first admin, or if you're locked out):
+
+```bash
+node scripts/add-user.js <username> <password> [viewer|editor|admin]
+node scripts/add-user.js --list
+node scripts/add-user.js --remove <username>
+```
 
 Re-running `add-user.js` with an existing username resets that user's password/role.
-Remove a user with `node scripts/add-user.js --remove <username>`.
 
 ## Config (`.env`)
 
