@@ -12,8 +12,10 @@ Three pages, all behind the same login:
 - **📍 Feed** (`/`) — one location's contents, grouped by pallet, scannable barcodes.
   Deep-linkable: `/?loc=GT.2.Z2.C03` opens straight on that bin.
 - **📊 Dashboard** (`/dashboard.html`) — whole-warehouse aggregates from the same
-  snapshot: totals, the frozen→temp state mix, oldest pallets, biggest products,
-  and a clickable **all-locations** table.
+  snapshot: totals, the frozen→temp state mix, oldest pallets (tempering clock:
+  TEMP 6+ days shows red), biggest products, **manager-named product groups**
+  (editors pick items, name the set, and watch it as one line — with a red count),
+  and a clickable **all-locations** table with one-tap zone buttons.
 - **💬 Requests** (`/requests.html`) — the app's build queue. Users write what they
   want the app to show; the build side reads the thread and ships it. Seeded with
   interview questions on first run.
@@ -32,6 +34,7 @@ slightly-stale, never blank.
 - `backend/inventory.js` — the snapshot: pull → index by location; also the dashboard's `overview()` aggregates.
 - `backend/notes.js` — the app's own notes/flags layer (never writes to Swarmbox).
 - `backend/requests.js` — the build-queue thread (`data/requests.json`).
+- `backend/groups.js` — manager-named product groups (`data/product-groups.json`).
 - `backend/users.js` + `backend/auth.js` — per-user login with `viewer`/`editor`/`admin` roles,
   plus a narrow `X-Api-Key` lane scoped to `/api/requests*` only.
 - `public/` — the login screen, the feed, the dashboard, and the requests thread.

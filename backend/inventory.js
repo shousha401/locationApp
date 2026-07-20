@@ -185,12 +185,25 @@ function getLocation(code) {
 }
 
 // Whole-snapshot aggregates for the dashboard: totals, the state mix (the
-// tempering pipeline), oldest pallets, biggest products, and a one-line summary
-// per location. Pure RAM reads over ~1.7k rows — cheap enough to recompute per
-// request, and zero extra Swarmbox load.
-function overview() {
+// tempering pipeline), oldest pallets, biggest products, manager-defined
+// product groups, and a one-line summary per location. Pure RAM reads over
+// ~1.7k rows — cheap enough to recompute per request, zero extra Swarmbox load.
+function overview(groupDefs) {
   const addW = (map, uom, qty) => { if (uom) map.set(uom, (map.get(uom) || 0) + qty); };
   const wArr = (map) => [...map.entries()].map(([uom, qty]) => ({ uom, qty }));
+
+  // The tempering clock, mirrored from the UI: TEMP for 6+ days is "red".
+  // Swarmbox dates are date-only strings, so day precision is all there is.
+  const daysSince = (d) => {
+    if (!d) return null;
+    const t = new Date(String(d).length <= 10 ? d + 'T00:00:00' : d).getTime();
+    return Number.isFinite(t) ? Math.floor((Date.now() - t) / 86400000) : null;
+  };
+  const isRed = (r) => {
+    if (r.state !== 'TEMP') return false;
+    const days = daysSince(r.stateDate);
+    return days != null && days >= 6;
+  };
 
   const totalsW = new Map();
   const allPallets = new Set();
@@ -199,8 +212,22 @@ function overview() {
 
   const states = new Map();   // state -> { units, pallets:Set, weight:Map }
   const products = new Map(); // item  -> { item, description, units, pallets:Set, weight:Map }
-  const pallets = new Map();  // pallet|item -> { pallet, item, location, date, state, stateDate, units, weight:Map }
+  const pallets = new Map();  // pallet|item -> { pallet, item, location, date, state, stateDate, units, cases:Map, weight:Map, red }
   const locations = [];
+
+  // Manager groups: index item code -> the groups that contain it, so the main
+  // row loop below can accumulate group totals in the same single pass.
+  const gAgg = (groupDefs || []).map((g) => ({
+    id: g.id, name: g.name, items: g.items, updatedBy: g.updatedBy, updatedAt: g.updatedAt,
+    units: 0, pallets: new Set(), redPallets: new Set(), cases: new Map(), weight: new Map(),
+    perItem: new Map(), // item -> { units, pallets:Set, cases:Map, weight:Map, red:Set }
+  }));
+  const groupsByItem = new Map();
+  for (const g of gAgg) for (const it of g.items) {
+    let arr = groupsByItem.get(it);
+    if (!arr) { arr = []; groupsByItem.set(it, arr); }
+    arr.push(g);
+  }
 
   for (const [code, rows] of snap.byLocation) {
     const loc = { code, products: new Set(), pallets: new Set(), units: rows.length,
@@ -230,11 +257,22 @@ function overview() {
       let pa = pallets.get(pk);
       if (!pa) {
         pa = { pallet: r.pallet, item: r.item, description: snap.itemDesc.get(r.item) || '',
-          location: code, date: r.date, state: r.state, stateDate: r.stateDate, units: 0, weight: new Map() };
+          location: code, date: r.date, state: r.state, stateDate: r.stateDate,
+          units: 0, cases: new Map(), weight: new Map(), red: false };
         pallets.set(pk, pa);
       }
-      pa.units++; addW(pa.weight, r.varUom, r.varQty);
+      pa.units++; addW(pa.cases, r.baseUom, r.baseQty); addW(pa.weight, r.varUom, r.varQty);
       if (r.date && (!pa.date || r.date < pa.date)) pa.date = r.date;
+      if (isRed(r)) pa.red = true;
+
+      for (const g of groupsByItem.get(r.item) || []) {
+        g.units++; addW(g.cases, r.baseUom, r.baseQty); addW(g.weight, r.varUom, r.varQty);
+        if (r.pallet) { g.pallets.add(r.pallet); if (isRed(r)) g.redPallets.add(r.pallet); }
+        let gi = g.perItem.get(r.item);
+        if (!gi) { gi = { units: 0, pallets: new Set(), cases: new Map(), weight: new Map(), red: new Set() }; g.perItem.set(r.item, gi); }
+        gi.units++; if (r.pallet) gi.pallets.add(r.pallet); addW(gi.cases, r.baseUom, r.baseQty); addW(gi.weight, r.varUom, r.varQty);
+        if (isRed(r) && r.pallet) gi.red.add(r.pallet);
+      }
     }
     locations.push({
       code, products: loc.products.size, pallets: loc.pallets.size, units: loc.units,
@@ -256,7 +294,26 @@ function overview() {
     .filter((p) => p.date)
     .sort((a, b) => (a.date < b.date ? -1 : 1))
     .slice(0, 15)
-    .map((p) => ({ ...p, weight: wArr(p.weight) }));
+    .map((p) => ({ ...p, cases: wArr(p.cases), weight: wArr(p.weight) }));
+
+  // Every product in the snapshot (GT is ~30 items) — feeds the group editor's
+  // pick list, unlike topProducts which is capped for display.
+  const productList = [...products.values()]
+    .sort((a, b) => (a.item < b.item ? -1 : 1))
+    .map((p) => ({ item: p.item, description: p.description, pallets: p.pallets.size }));
+
+  const groupSummaries = gAgg
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((g) => ({
+      id: g.id, name: g.name, items: g.items, updatedBy: g.updatedBy, updatedAt: g.updatedAt,
+      presentItems: g.perItem.size, units: g.units, pallets: g.pallets.size,
+      redPallets: g.redPallets.size, cases: wArr(g.cases), weight: wArr(g.weight),
+      perItem: [...g.perItem.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1)).map(([item, gi]) => ({
+        item, description: snap.itemDesc.get(item) || '',
+        units: gi.units, pallets: gi.pallets.size, red: gi.red.size,
+        cases: wArr(gi.cases), weight: wArr(gi.weight),
+      })),
+    }));
 
   return {
     ok: snap.ok, builtAt: snap.builtAt, prefix: PREFIX,
@@ -265,7 +322,7 @@ function overview() {
     states: [...states.values()]
       .sort((a, b) => b.units - a.units)
       .map((s) => ({ state: s.state, units: s.units, pallets: s.pallets.size, weight: wArr(s.weight) })),
-    oldestPallets, topProducts, locations,
+    oldestPallets, topProducts, locations, allProducts: productList, groups: groupSummaries,
   };
 }
 

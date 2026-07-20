@@ -10,6 +10,7 @@ const users = require('./backend/users');
 const inventory = require('./backend/inventory');
 const notes = require('./backend/notes');
 const requests = require('./backend/requests');
+const groups = require('./backend/groups');
 
 const app = express();
 app.use(express.json({ limit: '256kb' }));
@@ -51,7 +52,31 @@ app.put('/api/notes/:code', auth.requireEditor, (req, res) => {
 });
 
 // Whole-snapshot aggregates for the dashboard. Served from RAM — costs Swarmbox nothing.
-app.get('/api/overview', (_req, res) => res.json(inventory.overview()));
+app.get('/api/overview', (_req, res) => res.json(inventory.overview(groups.list())));
+
+// ── Product groups ───────────────────────────────────────────────────────────
+// Managers (editor+) name a set of item codes; the dashboard aggregates each
+// group from the snapshot. Everyone can see them.
+const groupResult = (res, r, who, verb) => {
+  if (!r) return res.status(404).json({ error: 'No such group' });
+  if (r.error) return res.status(400).json({ error: r.error });
+  console.log(`[Groups] ${who} ${verb} '${r.name}' (${r.items.length} items)`);
+  res.json(r);
+};
+app.get('/api/groups', (_req, res) => res.json({ groups: groups.list() }));
+app.post('/api/groups', auth.requireEditor, (req, res) => {
+  const b = req.body || {};
+  groupResult(res, groups.create(b.name, b.items, req.user.username), req.user.username, 'created');
+});
+app.put('/api/groups/:id', auth.requireEditor, (req, res) => {
+  groupResult(res, groups.update(req.params.id, req.body || {}, req.user.username), req.user.username, 'updated');
+});
+app.delete('/api/groups/:id', auth.requireEditor, (req, res) => {
+  const g = groups.remove(req.params.id);
+  if (!g) return res.status(404).json({ error: 'No such group' });
+  console.log(`[Groups] ${req.user.username} deleted '${g.name}'`);
+  res.json({ ok: true, removed: g.name });
+});
 
 // ── Build-requests channel ───────────────────────────────────────────────────
 // The app's feedback loop: any signed-in user (viewers included — that's Clay)

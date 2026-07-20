@@ -73,6 +73,39 @@
     .selsum { font-size:12px; color:var(--muted); margin-top:8px; }
     .selsum b { color:var(--text); }
     .count { font-size:11px; color:var(--muted); text-transform:none; letter-spacing:0; }
+    .hidden { display:none; }
+    tr.gsub td { background:var(--panel2); font-size:12px; padding-top:5px; padding-bottom:5px; }
+    .gname { font-weight:700; cursor:pointer; }
+    .gedit { padding:2px 10px; border-radius:7px; border:1px solid var(--line); background:none;
+      color:var(--muted); cursor:pointer; font-size:11px; margin-left:8px; }
+    .gedit:hover { border-color:var(--accent); color:var(--accent); }
+    .redcount { color:var(--err); font-weight:700; }
+
+    /* group editor overlay (dark, unlike the white barcode sheet on the feed) */
+    .modal { position:fixed; inset:0; background:rgba(2,6,23,.85); display:none; z-index:50;
+      align-items:center; justify-content:center; padding:20px; }
+    .modal.on { display:flex; }
+    .gsheet { background:var(--panel); border:1px solid var(--line); color:var(--text);
+      border-radius:14px; padding:20px 22px; width:min(94vw,560px); max-height:90vh;
+      overflow:auto; }
+    .gsheet h3 { margin:0 0 12px; font-size:15px; }
+    .gsheet input[type=text] { width:100%; padding:10px 12px; font-size:15px; border-radius:9px;
+      border:1px solid var(--line); background:var(--panel2); color:var(--text); margin-bottom:12px; }
+    .gsheet input[type=text]:focus { outline:none; border-color:var(--accent); }
+    .picklist { border:1px solid var(--line); border-radius:9px; max-height:44vh; overflow:auto; }
+    .pick { display:flex; gap:9px; align-items:center; padding:7px 11px; cursor:pointer;
+      border-bottom:1px solid rgba(51,65,85,.45); font-size:13px; }
+    .pick:last-child { border-bottom:0; }
+    .pick:hover { background:rgba(56,189,248,.06); }
+    .pick .mono { min-width:64px; }
+    .pick .desc { flex:1; }
+    .gactions { display:flex; gap:10px; margin-top:14px; align-items:center; }
+    .gactions .grow { flex:1; }
+    .gactions button { padding:9px 18px; border-radius:8px; border:0; cursor:pointer; font-weight:700; }
+    .gsave { background:var(--accent); color:#04222f; }
+    .gcancel { background:none; border:1px solid var(--line) !important; color:var(--muted); }
+    .gdelete { background:none; border:1px solid var(--err) !important; color:var(--err); }
+    .gerr { color:var(--err); font-size:12px; margin-top:8px; min-height:16px; }
   </style>
 </head>
 <body>
@@ -104,6 +137,14 @@
     </div>
 
     <div class="card">
+      <h2>Product groups
+        <span><button class="zbtn hidden" id="newGroup">＋ New group</button></span></h2>
+      <div class="scroll"><table id="groupsTbl"></table></div>
+      <div class="empty hidden" id="groupsEmpty">No groups yet.
+        Editors can press <b>＋ New group</b> to name a set of products and watch them as one line.</div>
+    </div>
+
+    <div class="card">
       <h2>Oldest inventory <span class="count">longest-sitting pallets</span></h2>
       <div class="scroll"><table id="oldest"></table></div>
     </div>
@@ -118,6 +159,19 @@
       <div class="scroll"><table id="locs"></table></div>
     </div>
   </div>
+
+  <div class="modal" id="gmodal"><div class="gsheet">
+    <h3 id="gtitle">New group</h3>
+    <input type="text" id="gname" placeholder="Group name — what the floor calls these" maxlength="60">
+    <div class="picklist" id="gpick"></div>
+    <div class="gerr" id="gerrbox"></div>
+    <div class="gactions">
+      <button class="gdelete hidden" id="gdel">Delete group</button>
+      <div class="grow"></div>
+      <button class="gcancel" id="gcancel">Cancel</button>
+      <button class="gsave" id="gsave">Save</button>
+    </div>
+  </div></div>
 
   <script>
     const $ = (id) => document.getElementById(id);
@@ -140,17 +194,98 @@
       const cls = days != null && days > 180 ? 'age-old' : '';
       return `<span class="${cls}">${esc(d)}${days != null ? ` (${fmtInt(days)}d)` : ''}</span>`;
     };
-    // TEMP for 6+ days goes red — the tempering clock. TEMP only: an old
-    // "since" on FROZEN is harmless and would drown the signal.
-    const stateCell = (p) => {
-      if (!p.state) return '—';
-      const days = daysSince(p.stateDate);
-      const late = p.state === 'TEMP' && days != null && days >= 6;
-      return `<span class="chip ${esc(p.state)}${late ? ' late' : ''}">${esc(p.state)}</span>` +
-        (p.stateDate ? `<div class="desc ${late ? 'since-late' : ''}" style="font-size:10px">since ${esc(p.stateDate)}${days != null ? ` (${fmtInt(days)}d)` : ''}</div>` : '');
-    };
+    let LOCS = [];  // the full per-location list, filtered client-side
+    let O = null;   // last overview payload (feeds the group editor's pick list)
+    let ME = { username: '', role: 'viewer' };
 
-    let LOCS = []; // the full per-location list, filtered client-side
+    // ── Product groups ────────────────────────────────────────────────────────
+    function renderGroups(o) {
+      O = o;
+      const isMgr = ME.role === 'editor' || ME.role === 'admin';
+      $('newGroup').classList.toggle('hidden', !isMgr);
+      const gs = o.groups || [];
+      $('groupsEmpty').classList.toggle('hidden', !!gs.length);
+      if (!gs.length) { $('groupsTbl').innerHTML = ''; return; }
+      $('groupsTbl').innerHTML = `
+        <thead><tr><th>Group</th><th class="num">Products</th><th class="num">Pallets</th>
+          <th class="num">Cases</th><th class="num">Weight</th><th class="num">Red</th><th></th></tr></thead>
+        <tbody>${gs.map((g) => `
+          <tr class="click" data-g="${g.id}">
+            <td class="gname">${esc(g.name)}</td>
+            <td class="num">${fmtInt(g.presentItems)} of ${fmtInt(g.items.length)}</td>
+            <td class="num">${fmtInt(g.pallets)}</td>
+            <td class="num">${wStr(g.cases)}</td>
+            <td class="num">${wStr(g.weight)}</td>
+            <td class="num">${g.redPallets ? `<span class="redcount">${fmtInt(g.redPallets)} 🔴</span>` : '—'}</td>
+            <td>${isMgr ? `<button class="gedit" data-edit="${g.id}">edit</button>` : ''}</td>
+          </tr>
+          <tr class="gsub hidden" data-sub="${g.id}"><td colspan="7">
+            ${g.perItem.length ? g.perItem.map((i) => `
+              <div style="display:flex;gap:14px;flex-wrap:wrap;padding:2px 0">
+                <span class="mono" style="min-width:64px">${esc(i.item)}</span>
+                <span class="desc" style="flex:1;min-width:180px">${esc(i.description)}</span>
+                <span>${fmtInt(i.pallets)} plt</span><span>${wStr(i.cases)}</span><span>${wStr(i.weight)}</span>
+                <span>${i.red ? `<span class="redcount">${fmtInt(i.red)} 🔴</span>` : ''}</span>
+              </div>`).join('')
+            : '<span class="desc">None of these products are in GT right now.</span>'}
+          </td></tr>`).join('')}</tbody>`;
+    }
+    $('groupsTbl').addEventListener('click', (e) => {
+      const ed = e.target.closest('[data-edit]');
+      if (ed) { openEditor(Number(ed.dataset.edit)); return; }
+      const tr = e.target.closest('tr[data-g]');
+      if (tr) {
+        const sub = $('groupsTbl').querySelector(`tr[data-sub="${tr.dataset.g}"]`);
+        if (sub) sub.classList.toggle('hidden');
+      }
+    });
+
+    let EDIT_ID = null;
+    function openEditor(id) {
+      const g = id != null ? (O.groups || []).find((x) => x.id === id) : null;
+      EDIT_ID = g ? g.id : null;
+      $('gtitle').textContent = g ? `Edit "${g.name}"` : 'New group';
+      $('gname').value = g ? g.name : '';
+      $('gerrbox').textContent = '';
+      $('gdel').classList.toggle('hidden', !g);
+      const chosen = new Set(g ? g.items : []);
+      // Pick from every product in the snapshot; keep chosen codes that have
+      // rotated out of GT so editing a group never silently drops them.
+      const known = new Set((O.allProducts || []).map((p) => p.item));
+      const extras = [...chosen].filter((c) => !known.has(c));
+      $('gpick').innerHTML = (O.allProducts || []).map((p) => `
+        <label class="pick"><input type="checkbox" value="${esc(p.item)}" ${chosen.has(p.item) ? 'checked' : ''}>
+          <span class="mono">${esc(p.item)}</span><span class="desc">${esc(p.description)}</span>
+          <span class="desc">${fmtInt(p.pallets)} plt</span></label>`).join('')
+        + extras.map((c) => `
+        <label class="pick"><input type="checkbox" value="${esc(c)}" checked>
+          <span class="mono">${esc(c)}</span><span class="desc">not in GT right now</span></label>`).join('');
+      $('gmodal').classList.add('on');
+    }
+    const closeEditor = () => $('gmodal').classList.remove('on');
+    $('gcancel').addEventListener('click', closeEditor);
+    $('gmodal').addEventListener('click', (e) => { if (e.target.id === 'gmodal') closeEditor(); });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeEditor(); });
+    $('newGroup').addEventListener('click', () => openEditor(null));
+
+    $('gsave').addEventListener('click', async () => {
+      const name = $('gname').value.trim();
+      const items = [...$('gpick').querySelectorAll('input:checked')].map((i) => i.value);
+      const url = EDIT_ID != null ? '/api/groups/' + EDIT_ID : '/api/groups';
+      const res = await fetch(url, {
+        method: EDIT_ID != null ? 'PUT' : 'POST',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, items }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) { $('gerrbox').textContent = j.error || 'Could not save.'; return; }
+      closeEditor(); load();
+    });
+    $('gdel').addEventListener('click', async () => {
+      if (EDIT_ID == null) return;
+      if (!confirm('Delete this group? The products themselves are untouched.')) return;
+      await fetch('/api/groups/' + EDIT_ID, { method: 'DELETE' });
+      closeEditor(); load();
+    });
 
     // One-tap zone buttons, derived from the codes themselves (GT.2 → GT.2.Z1 …)
     // so new zones show up on their own. A chip just fills the filter box.
@@ -245,15 +380,24 @@
           <td class="num">${fmtInt(p.pallets)}</td><td class="num">${fmtInt(p.units)}</td>
           <td class="num">${wStr(p.weight)}</td></tr>`).join('')}</tbody>`;
 
+      // "Since" (the tempering clock) is the date managers act on, so it gets
+      // the primary column; received demotes to the small line under the state.
       $('oldest').innerHTML = `
-        <thead><tr><th>Pallet</th><th>Item</th><th>Location</th><th>Received</th><th>State</th><th class="num">Weight</th></tr></thead>
-        <tbody>${o.oldestPallets.map((p) => `
+        <thead><tr><th>Pallet</th><th>Item</th><th>Location</th><th>Since</th><th>State · received</th><th class="num">Cases</th><th class="num">Weight</th></tr></thead>
+        <tbody>${o.oldestPallets.map((p) => {
+          const sd = daysSince(p.stateDate);
+          const rd = daysSince(p.date);
+          return `
           <tr><td class="mono">${esc(p.pallet) || '—'}</td>
           <td><span class="mono">${esc(p.item)}</span><div class="desc">${esc(p.description)}</div></td>
           <td class="mono"><a href="/?loc=${encodeURIComponent(p.location)}">${esc(p.location)}</a></td>
-          <td>${ageCell(p.date)}</td>
-          <td>${stateCell(p)}</td>
-          <td class="num">${wStr(p.weight)}</td></tr>`).join('')}</tbody>`;
+          <td>${p.stateDate ? `<span class="${p.red ? 'since-late' : ''}">${esc(p.stateDate)}${sd != null ? ` (${fmtInt(sd)}d)` : ''}</span>` : '—'}</td>
+          <td>${p.state ? `<span class="chip ${esc(p.state)}${p.red ? ' late' : ''}">${esc(p.state)}</span>` : '—'}${p.date ? `<div class="desc" style="font-size:10px">received ${esc(p.date)}${rd != null ? ` (${fmtInt(rd)}d)` : ''}</div>` : ''}</td>
+          <td class="num">${wStr(p.cases)}</td>
+          <td class="num">${wStr(p.weight)}</td></tr>`;
+        }).join('')}</tbody>`;
+
+      renderGroups(o);
 
       LOCS = o.locations || [];
       renderZones();
@@ -267,8 +411,8 @@
 
     async function init() {
       try {
-        const me = await (await fetch('/api/session')).json();
-        $('who').textContent = me.username;
+        ME = await (await fetch('/api/session')).json();
+        $('who').textContent = ME.username;
       } catch (_) { location.href = '/login.html'; return; }
       await load();
       setInterval(load, 60000);
