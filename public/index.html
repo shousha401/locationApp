@@ -91,6 +91,52 @@
     .banner.warn { background:#3b2a0b; color:var(--warn); border:1px solid #5a4514; }
     .banner.err { background:#3b0f0f; color:var(--err); border:1px solid #5a1414; }
     .hidden { display:none; }
+
+    /* ── Pallet cards ─────────────────────────────────────────────────────── */
+    .pallet { border:1px solid var(--line); border-radius:11px; margin:16px; overflow:hidden; background:var(--panel2); }
+    .phead { padding:13px 15px; border-bottom:1px solid var(--line); display:flex; gap:16px; align-items:flex-start; flex-wrap:wrap; }
+    .plabel { font-size:10px; text-transform:uppercase; letter-spacing:.09em; color:var(--muted); margin-bottom:2px; }
+    .pid { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:25px; font-weight:700;
+      letter-spacing:.08em; white-space:nowrap; line-height:1.15; }
+    .pprod { margin-top:7px; font-size:14px; }
+    .pprod b { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+    .pmeta { margin-top:6px; font-size:12px; color:var(--muted); }
+    .pmeta .sep { opacity:.35; margin:0 2px; }
+    .ptot { margin-left:auto; text-align:right; white-space:nowrap; }
+    .ptot b { display:block; font-size:20px; }
+    .ptot .cap { font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; }
+
+    .units { width:100%; border-collapse:collapse; }
+    .units th { font-size:10px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted);
+      text-align:left; padding:7px 12px; border-bottom:1px solid var(--line); }
+    .units td { padding:7px 12px; border-bottom:1px solid rgba(51,65,85,.45); white-space:nowrap; vertical-align:middle; }
+    .units tr:last-child td { border-bottom:0; }
+    .units tr:hover td { background:rgba(56,189,248,.05); }
+    .serial { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:16px; letter-spacing:.04em; }
+    .idx { color:var(--muted); font-size:11px; width:28px; }
+    .bcode { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:10px; color:var(--muted);
+      max-width:210px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+      display:inline-block; vertical-align:middle; }
+    .scan { padding:4px 9px; border-radius:6px; border:1px solid var(--line); background:var(--panel);
+      color:var(--accent); cursor:pointer; font-size:11px; white-space:nowrap; }
+    .scan:hover { border-color:var(--accent); }
+
+    /* ── Barcode overlay. Deliberately WHITE: scanners need dark bars on a light
+       background, so this one panel opts out of the dark theme. ───────────── */
+    .modal { position:fixed; inset:0; background:rgba(2,6,23,.85); display:none; z-index:50;
+      align-items:center; justify-content:center; padding:20px; }
+    .modal.on { display:flex; }
+    .sheet { background:#fff; color:#0f172a; border-radius:14px; padding:22px 24px;
+      max-width:min(94vw,880px); max-height:92vh; overflow:auto; text-align:center; }
+    .sheet .cap { font-size:11px; text-transform:uppercase; letter-spacing:.09em; color:#64748b; }
+    .sheet .val { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:23px;
+      font-weight:700; margin:2px 0 16px; word-break:break-all; }
+    .sheet svg { display:block; margin:0 auto; max-width:100%; height:auto; }
+    .sheet .digits { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px;
+      color:#334155; margin-top:10px; word-break:break-all; }
+    .sheet .tip { font-size:11px; color:#64748b; margin-top:12px; }
+    .sheet .close { margin-top:16px; padding:9px 24px; border:0; border-radius:8px;
+      background:#0f172a; color:#fff; font-weight:700; cursor:pointer; }
   </style>
 </head>
 <body>
@@ -124,6 +170,8 @@
       </div>
     </div>
   </div>
+
+  <div class="modal" id="modal"><div class="sheet" id="sheet"></div></div>
 
   <script>
     const $ = (id) => document.getElementById(id);
@@ -201,6 +249,87 @@
       }
     }
 
+    // ── Code 128 ───────────────────────────────────────────────────────────────
+    // Drawn in-page so a scanner can read it straight off the monitor. Written out
+    // by hand rather than pulled from a library — this app ships no external deps,
+    // and it has to keep working with no internet.
+    const C128 = ['212222','222122','222221','121223','121322','131222','122213','122312','132212','221213',
+      '221312','231212','112232','122132','122231','113222','123122','123221','223211','221132',
+      '221231','213212','223112','312131','311222','321122','321221','312212','322112','322211',
+      '212123','212321','232121','111323','131123','131321','112313','132113','132311','211313',
+      '231113','231311','112133','112331','132131','113123','113321','133121','313121','211331',
+      '231131','213113','213311','213131','311123','311321','331121','312113','312311','332111',
+      '314111','221411','431111','111224','111422','121124','121421','141122','141221','112214',
+      '112412','122114','122411','142112','142211','241211','221114','413111','241112','134111',
+      '111242','121142','121241','114212','124112','124211','411212','421112','421211','212141',
+      '214121','412121','111143','111341','131141','114113','114311','411113','411311','113141',
+      '114131','311141','411131','211412','211214','211232','2331112'];
+
+    // Code C (2 digits per symbol, so a 44-digit barcode stays a sane width) when the
+    // value is all digits and even-length; Code B otherwise (e.g. pallet ids with spaces).
+    function code128Codes(text) {
+      const s = String(text);
+      if (/^\d+$/.test(s) && s.length % 2 === 0) {
+        const vals = [];
+        for (let i = 0; i < s.length; i += 2) vals.push(parseInt(s.substr(i, 2), 10));
+        return { start: 105, vals };
+      }
+      const vals = [];
+      for (const ch of s) {
+        const c = ch.charCodeAt(0);
+        vals.push(c >= 32 && c <= 126 ? c - 32 : 0);
+      }
+      return { start: 104, vals };
+    }
+
+    function code128SVG(text, moduleW, height) {
+      const { start, vals } = code128Codes(text);
+      let sum = start;
+      vals.forEach((v, i) => { sum += v * (i + 1); });
+      const codes = [start, ...vals, sum % 103, 106];   // start, data, checksum, stop
+      let bits = '';
+      for (const c of codes) {
+        let bar = true;
+        for (const ch of C128[c]) { bits += (bar ? '1' : '0').repeat(Number(ch)); bar = !bar; }
+      }
+      const quiet = 10;                                  // mandatory quiet zone
+      const w = (bits.length + quiet * 2) * moduleW;
+      let rects = '';
+      for (let i = 0; i < bits.length;) {
+        if (bits[i] === '1') {
+          let j = i; while (j < bits.length && bits[j] === '1') j++;
+          rects += `<rect x="${(quiet + i) * moduleW}" y="0" width="${(j - i) * moduleW}" height="${height}" fill="#000"/>`;
+          i = j;
+        } else i++;
+      }
+      return `<svg viewBox="0 0 ${w} ${height}" width="${w}" height="${height}" xmlns="http://www.w3.org/2000/svg">`
+        + `<rect width="${w}" height="${height}" fill="#fff"/>${rects}</svg>`;
+    }
+
+    function showBarcode(kind, value) {
+      $('sheet').innerHTML = `
+        <div class="cap">${esc(kind)}</div>
+        <div class="val">${esc(value)}</div>
+        ${code128SVG(value, 2, 120)}
+        <div class="digits">${esc(value)}</div>
+        <div class="tip">Code 128 · scan straight off the screen. Enlarge the window if it won't read.</div>
+        <button class="close" id="closeModal">Close</button>`;
+      $('modal').classList.add('on');
+      $('closeModal').addEventListener('click', hideBarcode);
+    }
+    const hideBarcode = () => $('modal').classList.remove('on');
+    $('modal').addEventListener('click', (e) => { if (e.target.id === 'modal') hideBarcode(); });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') hideBarcode(); });
+    $('feed').addEventListener('click', (e) => {
+      const b = e.target.closest('.scan');
+      if (b) showBarcode(b.dataset.kind, b.dataset.bc);
+    });
+
+    // ── The feed ───────────────────────────────────────────────────────────────
+    // Grouped by PALLET rather than one flat row per unit: a bin is typically one
+    // pallet of one product, so a flat table repeats the pallet id, product, PO,
+    // manufacturer and date on every one of its 25+ lines. The pallet is the thing
+    // a person is actually looking for, so it gets to be the headline.
     function renderFeed(data) {
       $('feedEmpty').classList.add('hidden');
       const feed = $('feed'); feed.classList.remove('hidden');
@@ -219,10 +348,74 @@
       const ageCell = (d) => {
         if (!d) return '—';
         const days = daysSince(d);
-        const cls = days != null && days > 180 ? ' age-old' : '';
-        return `<span class="${cls}">${esc(d)}${days != null ? ` <span class="desc">(${fmtInt(days)}d)</span>` : ''}</span>`;
+        const cls = days != null && days > 180 ? 'age-old' : '';
+        return `<span class="${cls}">${esc(d)}${days != null ? ` (${fmtInt(days)}d)` : ''}</span>`;
       };
       const packCell = (q, u) => (q ? `${fmtQty(q)} <span class="desc">${esc(u || '')}</span>` : '—');
+
+      // Group by pallet + product (a pallet usually holds one product, but don't assume).
+      const groups = new Map();
+      for (const r of rows) {
+        const key = (r.pallet || '~nopallet') + '|' + r.item;
+        let g = groups.get(key);
+        if (!g) {
+          g = { pallet: r.pallet, item: r.item, description: r.description, units: [],
+                weight: new Map(), states: new Set(), pos: new Set(), mans: new Set(), oldest: null };
+          groups.set(key, g);
+        }
+        g.units.push(r);
+        if (r.varUom) g.weight.set(r.varUom, (g.weight.get(r.varUom) || 0) + r.varQty);
+        if (r.state) g.states.add(r.state);
+        if (r.po) g.pos.add(r.po);
+        if (r.manufacturer) g.mans.add(r.manufacturer);
+        if (r.date && (!g.oldest || r.date < g.oldest)) g.oldest = r.date;
+      }
+
+      const cards = [...groups.values()].map((g) => {
+        const gw = [...g.weight.entries()].map(([u, q]) => `${fmtQty(q)} ${esc(u)}`).join(' · ') || '—';
+        const hasLean = g.units.some((u) => u.lean != null);
+        const meta = [
+          g.mans.size ? [...g.mans].map(esc).join(', ') : null,
+          g.pos.size ? 'PO ' + [...g.pos].map(esc).join(', ') : null,
+          g.oldest ? 'received ' + ageCell(g.oldest) : null,
+          [...g.states].map((s) => `<span class="chip ${esc(s)}">${esc(s)}</span>`).join(' ') || null,
+        ].filter(Boolean).join('<span class="sep">·</span>');
+
+        return `
+          <div class="pallet">
+            <div class="phead">
+              <div>
+                <div class="plabel">Pallet ID</div>
+                <div class="pid">${g.pallet ? esc(g.pallet) : '—'}</div>
+                <div class="pprod"><b>${esc(g.item)}</b> · ${esc(g.description) || '—'}</div>
+                <div class="pmeta">${meta}</div>
+              </div>
+              <div class="ptot">
+                <b>${gw}</b><div class="cap">${fmtInt(g.units.length)} units</div>
+                ${g.pallet ? `<div style="margin-top:9px"><button class="scan" data-kind="Pallet ID" data-bc="${esc(g.pallet)}">▌▌ Scan pallet</button></div>` : ''}
+              </div>
+            </div>
+            <table class="units">
+              <thead><tr>
+                <th></th><th>Serial</th><th>Pack</th><th>Quantity</th>${hasLean ? '<th>Lean</th>' : ''}<th>Barcode</th>
+              </tr></thead>
+              <tbody>
+                ${g.units.map((u, i) => `
+                  <tr>
+                    <td class="idx">${i + 1}</td>
+                    <td class="serial">${esc(u.serial) || '—'}</td>
+                    <td>${packCell(u.baseQty, u.baseUom)}</td>
+                    <td>${packCell(u.varQty, u.varUom)}</td>
+                    ${hasLean ? `<td>${lean(u.lean)}</td>` : ''}
+                    <td>${u.barcode
+                      ? `<button class="scan" data-kind="Unit barcode" data-bc="${esc(u.barcode)}">▌▌</button>
+                         <span class="bcode" title="${esc(u.barcode)}">${esc(u.barcode)}</span>`
+                      : '—'}</td>
+                  </tr>`).join('')}
+              </tbody>
+            </table>
+          </div>`;
+      }).join('');
 
       feed.innerHTML = `
         <h2><span class="loc-title mono">${esc(data.code)}</span>
@@ -233,31 +426,7 @@
           <div class="stat"><b>${fmtInt(data.lineCount)}</b><span>Units</span></div>
           <div class="stat"><b>${weightStr}</b><span>Total weight</span></div>
         </div>
-        <div style="overflow-x:auto">
-        <table>
-          <thead><tr>
-            <th>Product</th><th>Description</th><th>Pallet ID</th><th>Serial</th>
-            <th class="num">Pack</th><th class="num">Quantity</th><th class="num">Lean</th>
-            <th>State</th><th>Received</th><th>PO #</th><th>Manufacturer</th><th>Barcode</th>
-          </tr></thead>
-          <tbody>
-            ${rows.map((r) => `
-              <tr>
-                <td class="mono">${esc(r.item)}</td>
-                <td class="desc">${esc(r.description) || '—'}</td>
-                <td class="mono">${esc(r.pallet) || '—'}</td>
-                <td class="mono">${esc(r.serial) || '—'}</td>
-                <td class="num">${packCell(r.baseQty, r.baseUom)}</td>
-                <td class="num">${packCell(r.varQty, r.varUom)}</td>
-                <td class="num">${lean(r.lean)}</td>
-                <td>${r.state ? `<span class="chip ${esc(r.state)}">${esc(r.state)}</span>` : '—'}</td>
-                <td>${ageCell(r.date)}</td>
-                <td class="mono">${esc(r.po) || '—'}</td>
-                <td>${esc(r.manufacturer) || '—'}</td>
-                <td class="mono barcode">${esc(r.barcode) || '—'}</td>
-              </tr>`).join('')}
-          </tbody>
-        </table></div>`;
+        ${cards}`;
     }
 
     // ── Notes & flags ──────────────────────────────────────────────────────────
