@@ -60,7 +60,9 @@ app.use((err, _req, res, _next) => { // eslint-disable-line no-unused-vars
   res.status((err && err.status) || 500).json({ error: 'Server error' });
 });
 
-const PORT = Number(process.env.PORT) || 3010;
+// 3005 = next free port in the fleet (3002 clayTool, 3003 formulation,
+// 3004 valueTool, 3010 CMP Maintenance are all taken on CMP-APP02).
+const PORT = Number(process.env.PORT) || 3005;
 app.listen(PORT, () => {
   if (users.list().length === 0) {
     console.warn('[locationApp] NO USERS EXIST — nobody can log in yet. Create one:');
