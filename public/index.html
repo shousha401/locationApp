@@ -114,6 +114,8 @@
     .units tr:hover td { background:rgba(56,189,248,.05); }
     .serial { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:16px; letter-spacing:.04em; }
     .since { font-size:10px; color:var(--muted); margin-top:2px; }
+    .chip.late { color:var(--err); border-color:var(--err); }
+    .since.late { color:var(--err); font-weight:700; }
     .idx { color:var(--muted); font-size:11px; width:28px; }
     .bcode { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:10px; color:var(--muted);
       max-width:210px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
@@ -358,10 +360,15 @@
       const packCell = (q, u) => (q ? `${fmtQty(q)} <span class="desc">${esc(u || '')}</span>` : '—');
       // Per-unit state with the date it ENTERED that state — for a TEMP unit,
       // "since" is exactly when it stopped being frozen (Clay's ask).
-      const stateCell = (u) => (u.state
-        ? `<span class="chip ${esc(u.state)}">${esc(u.state)}</span>` +
-          (u.stateDate ? `<div class="since">since ${esc(u.stateDate)}</div>` : '')
-        : '—');
+      // TEMP older than 6 days goes red: that's the tempering clock. Only TEMP —
+      // an old "since" on FROZEN is harmless and would drown the signal.
+      const stateCell = (u) => {
+        if (!u.state) return '—';
+        const days = daysSince(u.stateDate);
+        const late = u.state === 'TEMP' && days != null && days > 6;
+        return `<span class="chip ${esc(u.state)}${late ? ' late' : ''}">${esc(u.state)}</span>` +
+          (u.stateDate ? `<div class="since${late ? ' late' : ''}">since ${esc(u.stateDate)}${days != null ? ` (${fmtInt(days)}d)` : ''}</div>` : '');
+      };
 
       // Group by pallet + product (a pallet usually holds one product, but don't assume).
       const groups = new Map();

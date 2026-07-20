@@ -58,6 +58,8 @@
     .chip.FROZEN { color:var(--accent2); border-color:#14415a; }
     .chip.TEMP { color:#c4b5fd; border-color:#3b3160; }
     .age-old { color:var(--warn); }
+    .chip.late { color:var(--err); border-color:var(--err); }
+    .since-late { color:var(--err) !important; font-weight:700; }
     .empty { padding:40px 16px; text-align:center; color:var(--muted); }
     .filter { padding:10px 16px; border-bottom:1px solid var(--line); background:var(--panel2); }
     .filter input { width:100%; max-width:340px; padding:9px 12px; font-size:14px;
@@ -137,6 +139,15 @@
       const days = daysSince(d);
       const cls = days != null && days > 180 ? 'age-old' : '';
       return `<span class="${cls}">${esc(d)}${days != null ? ` (${fmtInt(days)}d)` : ''}</span>`;
+    };
+    // TEMP older than 6 days goes red — the tempering clock. TEMP only: an old
+    // "since" on FROZEN is harmless and would drown the signal.
+    const stateCell = (p) => {
+      if (!p.state) return '—';
+      const days = daysSince(p.stateDate);
+      const late = p.state === 'TEMP' && days != null && days > 6;
+      return `<span class="chip ${esc(p.state)}${late ? ' late' : ''}">${esc(p.state)}</span>` +
+        (p.stateDate ? `<div class="desc ${late ? 'since-late' : ''}" style="font-size:10px">since ${esc(p.stateDate)}${days != null ? ` (${fmtInt(days)}d)` : ''}</div>` : '');
     };
 
     let LOCS = []; // the full per-location list, filtered client-side
@@ -241,7 +252,7 @@
           <td><span class="mono">${esc(p.item)}</span><div class="desc">${esc(p.description)}</div></td>
           <td class="mono"><a href="/?loc=${encodeURIComponent(p.location)}">${esc(p.location)}</a></td>
           <td>${ageCell(p.date)}</td>
-          <td>${p.state ? `<span class="chip ${esc(p.state)}">${esc(p.state)}</span>` : '—'}${p.stateDate ? `<div class="desc" style="font-size:10px">since ${esc(p.stateDate)}</div>` : ''}</td>
+          <td>${stateCell(p)}</td>
           <td class="num">${wStr(p.weight)}</td></tr>`).join('')}</tbody>`;
 
       LOCS = o.locations || [];
