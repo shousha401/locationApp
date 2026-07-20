@@ -19,10 +19,15 @@ const { getRows, withRetry } = require('./swarmbox');
 // and being gentle with Swarmbox outranks freshness nobody can perceive.
 const REFRESH_MS = Number(process.env.SNAPSHOT_REFRESH_MS) || 15 * 60 * 1000;
 
-// Scope the whole app to one location prefix (a manager asked for GT-only). Set
-// LOCATION_PREFIX='' to serve every location. The filter is pushed down to Swarmbox
-// (location=like.GT*), so we also transfer far less — GT is ~1.7k rows, not 255k.
-const PREFIX = String(process.env.LOCATION_PREFIX ?? 'GT').trim().toUpperCase();
+// Scope the whole app to one location prefix (a manager asked for GT-only). The
+// filter is pushed down to Swarmbox (location=like.GT*), so we also transfer far
+// less — GT is ~1.7k rows, not 255k. Serving EVERY location is a deliberate,
+// heavy choice (~250k rows per refresh cycle), so it requires the explicit token
+// LOCATION_PREFIX=* — a blank value falls back to GT, so a dangling
+// `LOCATION_PREFIX=` line in .env can't silently switch on the full pull.
+const RAW_PREFIX = String(process.env.LOCATION_PREFIX ?? 'GT').trim().toUpperCase();
+const PREFIX = (RAW_PREFIX === '*' || RAW_PREFIX === 'ALL') ? '' : (RAW_PREFIX || 'GT');
+if (!PREFIX) console.warn('[Inventory] LOCATION_PREFIX=* — serving ALL locations (~250k rows per refresh)');
 
 // Everything inventory_detail exposes EXCEPT cost — the value is deliberately not
 // pulled, so it can't be shown or scraped. 'location' drives the index.
@@ -53,8 +58,11 @@ async function pull() {
   // background lane: nobody is blocked on it, and it's a heavy call — keep a
   // foreground slot free for interactive reads (there aren't any today, but the
   // guardrail costs nothing and future-proofs it).
+  // 2 attempts, not 3: each attempt can hold a connection up to the full 120s
+  // timeout, and a missed cycle only means 15 min of staleness — retrying a
+  // third time against an already-struggling Swarmbox isn't worth it.
   return withRetry(() => getRows(QUERY, { background: true }),
-    { attempts: 3, baseMs: 1000, label: 'inventory snapshot' });
+    { attempts: 2, baseMs: 1000, label: 'inventory snapshot' });
 }
 
 // Turn raw rows into the by-location index, deduping descriptions out of the rows
