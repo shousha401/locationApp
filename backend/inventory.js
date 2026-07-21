@@ -12,6 +12,8 @@
 // good data (with a visible "as of" stamp on the page), so a Swarmbox blip degrades
 // to slightly-stale, never blank.
 
+const fs = require('fs');
+const path = require('path');
 const { getRows, withRetry } = require('./swarmbox');
 
 // 15 min default: pallets sit for hours-to-days, so refreshing faster just
@@ -94,6 +96,88 @@ function build(rows) {
   return { byLocation, itemDesc, locations: [...byLocation.keys()].sort(), rowCount: rows.length };
 }
 
+// ── Snapshot cache on disk ───────────────────────────────────────────────────
+// The snapshot lived only in RAM, so every restart threw it away: the dashboard
+// went blank and Swarmbox took a cold pull on the critical path, just to
+// rebuild data that was already correct seconds earlier. Pallets sit for
+// hours-to-days, so the last good snapshot is still worth serving.
+//
+// Mirroring the in-RAM rule: only a SUCCESSFUL pull writes the cache, and boot
+// serves the cached snapshot immediately while a fresh pull runs behind it. The
+// "as of" stamp carries the ORIGINAL build time, so cached data can never
+// masquerade as live.
+const CACHE_FILE = path.join(__dirname, '..', 'data', 'snapshot.json');
+
+// Past this age the cache is discarded rather than served: pallet positions
+// that old would route someone to the wrong bin, and a blank dashboard is an
+// honest failure where confidently-wrong locations are not.
+const CACHE_MAX_AGE_MS = Number(process.env.SNAPSHOT_MAX_AGE_MS) || 24 * 60 * 60 * 1000;
+
+// LOCATION_PREFIX=* is ~250k rows (~60MB of JSON) — rewriting that every cycle
+// would churn the disk far more than a cold start costs. GT is ~1.7k, so this
+// ceiling is only reachable on the deliberate full-inventory setting.
+const CACHE_MAX_ROWS = Number(process.env.SNAPSHOT_CACHE_MAX_ROWS) || 50000;
+
+function saveCache(s) {
+  if (s.rowCount > CACHE_MAX_ROWS) {
+    console.warn(`[Inventory] snapshot cache skipped: ${s.rowCount} rows exceeds SNAPSHOT_CACHE_MAX_ROWS=${CACHE_MAX_ROWS}`);
+    return;
+  }
+  try {
+    const payload = {
+      v: 1, prefix: PREFIX, builtAt: s.builtAt, rowCount: s.rowCount,
+      byLocation: [...s.byLocation], itemDesc: [...s.itemDesc],
+    };
+    fs.mkdirSync(path.dirname(CACHE_FILE), { recursive: true });
+    // Write-then-rename: a crash mid-write leaves the previous cache intact
+    // instead of a truncated file that would poison the next boot.
+    const tmp = CACHE_FILE + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(payload));
+    fs.renameSync(tmp, CACHE_FILE);
+  } catch (e) {
+    console.error('[Inventory] snapshot cache save failed:', e.message);
+  }
+}
+
+// Returns a snapshot-shaped object, or null if there's nothing trustworthy to
+// serve. Every rejection says why — a silently ignored cache looks identical to
+// one that's working.
+function loadCache() {
+  let c;
+  try {
+    c = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'));
+  } catch (e) {
+    if (e.code !== 'ENOENT') console.error('[Inventory] snapshot cache unreadable:', e.message);
+    return null;
+  }
+  try {
+    if (c.v !== 1 || !Array.isArray(c.byLocation)) {
+      console.warn('[Inventory] snapshot cache ignored: unrecognized format'); return null;
+    }
+    // A cache built under a different LOCATION_PREFIX covers a different slice
+    // of the warehouse; serving it would quietly under-report.
+    if (String(c.prefix || '') !== PREFIX) {
+      console.warn(`[Inventory] snapshot cache ignored: built for prefix "${c.prefix || '*'}", now "${PREFIX || '*'}"`);
+      return null;
+    }
+    const builtAt = new Date(c.builtAt);
+    const ageMs = Date.now() - builtAt.getTime();
+    if (!Number.isFinite(ageMs) || ageMs < 0 || ageMs > CACHE_MAX_AGE_MS) {
+      console.warn(`[Inventory] snapshot cache ignored: ${Math.round(ageMs / 3600000)}h old (max ${Math.round(CACHE_MAX_AGE_MS / 3600000)}h)`);
+      return null;
+    }
+    const byLocation = new Map(c.byLocation);
+    return {
+      builtAt, ok: true, building: false, lastError: null, fromCache: true,
+      rowCount: c.rowCount || 0, byLocation, itemDesc: new Map(c.itemDesc || []),
+      locations: [...byLocation.keys()].sort(),
+    };
+  } catch (e) {
+    console.error('[Inventory] snapshot cache ignored:', e.message);
+    return null;
+  }
+}
+
 // Pull + swap. Never throws; on failure keeps the previous snapshot.
 async function refresh() {
   if (snap.building) return snap;
@@ -104,10 +188,11 @@ async function refresh() {
     if (res.ok) {
       const b = build(res.data);
       snap = {
-        builtAt: new Date(), ok: true, building: false, lastError: null,
+        builtAt: new Date(), ok: true, building: false, lastError: null, fromCache: false,
         rowCount: b.rowCount, byLocation: b.byLocation, locations: b.locations, itemDesc: b.itemDesc,
       };
       console.log(`[Inventory] snapshot refreshed: ${b.rowCount} rows / ${b.locations.length} locations in ${Math.round((Date.now() - started) / 1000)}s`);
+      saveCache(snap);
     } else {
       snap.building = false;
       snap.lastError = `(${res.status || 'err'}) ${(res.text || '').slice(0, 120)}`;
@@ -126,6 +211,7 @@ function status() {
     ok: snap.ok,
     building: snap.building,
     builtAt: snap.builtAt,
+    fromCache: !!snap.fromCache,  // serving the last saved snapshot, no live pull yet
     rowCount: snap.rowCount,
     locationCount: snap.locations.length,
     lastError: snap.lastError,
@@ -193,7 +279,7 @@ function getLocation(code) {
 }
 
 // Whole-snapshot aggregates for the dashboard: totals, the state mix (the
-// tempering pipeline), oldest pallets, biggest products, manager-defined
+// tempering pipeline), every pallet line, biggest products, manager-defined
 // product groups, and a one-line summary per location. Pure RAM reads over
 // ~1.7k rows — cheap enough to recompute per request, zero extra Swarmbox load.
 function overview(groupDefs) {
@@ -220,7 +306,7 @@ function overview(groupDefs) {
 
   const states = new Map();   // state -> { units, pallets:Set, weight:Map }
   const products = new Map(); // item  -> { item, description, units, pallets:Set, weight:Map }
-  const pallets = new Map();  // pallet|item -> { pallet, item, location, date, state, stateDate, units, cases:Map, weight:Map, red }
+  const pallets = new Map();  // pallet|item -> { pallet, item, locations:Set, date, state, stateDate, units, cases:Map, weight:Map, red }
   const locations = [];
 
   // Manager groups: index item code -> the groups that contain it, so the main
@@ -261,16 +347,26 @@ function overview(groupDefs) {
       }
       p.units++; if (r.pallet) p.pallets.add(r.pallet); addW(p.weight, r.varUom, r.varQty);
 
+      // One row per pallet+item. The same pallet can carry two products (two
+      // rows) and — rarely — one pallet+item can straddle two bins, so the
+      // location is a set: collapsing it to the first bin read would hide half
+      // the stock from whoever goes looking for it.
       const pk = (r.pallet || '~') + '|' + r.item;
       let pa = pallets.get(pk);
       if (!pa) {
         pa = { pallet: r.pallet, item: r.item, description: snap.itemDesc.get(r.item) || '',
-          location: code, date: r.date, state: r.state, stateDate: r.stateDate,
+          locations: new Set(), date: r.date, state: r.state, stateDate: r.stateDate,
           units: 0, cases: new Map(), weight: new Map(), red: false };
         pallets.set(pk, pa);
       }
+      pa.locations.add(code);
       pa.units++; addW(pa.cases, r.baseUom, r.baseQty); addW(pa.weight, r.varUom, r.varQty);
       if (r.date && (!pa.date || r.date < pa.date)) pa.date = r.date;
+      // Keep the earliest state date so the clock shown matches the red flag
+      // below, which trips on any row of the group.
+      if (r.stateDate && (!pa.stateDate || r.stateDate < pa.stateDate)) {
+        pa.stateDate = r.stateDate; pa.state = r.state;
+      }
       if (isRed(r)) pa.red = true;
 
       for (const g of groupsByItem.get(r.item) || []) {
@@ -298,11 +394,14 @@ function overview(groupDefs) {
     .map((p) => ({ item: p.item, description: p.description, units: p.units,
       pallets: p.pallets.size, weight: wArr(p.weight) }));
 
-  const oldestPallets = [...pallets.values()]
-    .filter((p) => p.date)
-    .sort((a, b) => (a.date < b.date ? -1 : 1))
-    .slice(0, 15)
-    .map((p) => ({ ...p, cases: wArr(p.cases), weight: wArr(p.weight) }));
+  // Every pallet+item line on hand, oldest first, nothing capped — the
+  // dashboard filters and pages this client-side. A manager hunting one pallet
+  // needs it to be present, not just the fifteen that have sat longest.
+  // Undated lines sort last rather than disappearing.
+  const palletRows = [...pallets.values()]
+    .sort((a, b) => (a.date === b.date ? 0 : !a.date ? 1 : !b.date ? -1 : a.date < b.date ? -1 : 1)
+      || (a.item < b.item ? -1 : a.item > b.item ? 1 : 0))
+    .map((p) => ({ ...p, locations: [...p.locations].sort(), cases: wArr(p.cases), weight: wArr(p.weight) }));
 
   // Every product in the snapshot (GT is ~30 items) — feeds the group editor's
   // pick list, unlike topProducts which is capped for display.
@@ -330,12 +429,21 @@ function overview(groupDefs) {
     states: [...states.values()]
       .sort((a, b) => b.units - a.units)
       .map((s) => ({ state: s.state, units: s.units, pallets: s.pallets.size, weight: wArr(s.weight) })),
-    oldestPallets, topProducts, locations, allProducts: productList, groups: groupSummaries,
+    palletRows, topProducts, locations, allProducts: productList, groups: groupSummaries,
   };
 }
 
 let timer = null;
 function start() {
+  // Serve the last good snapshot the instant we boot, then pull fresh behind
+  // it. A restart or deploy no longer means a blank dashboard for whoever is
+  // mid-shift and looking at it.
+  const cached = loadCache();
+  if (cached) {
+    snap = cached;
+    const mins = Math.round((Date.now() - cached.builtAt.getTime()) / 60000);
+    console.log(`[Inventory] serving cached snapshot: ${cached.rowCount} rows / ${cached.locations.length} locations, ${mins} min old — refreshing now`);
+  }
   refresh(); // warm on boot
   if (timer) clearInterval(timer);
   timer = setInterval(refresh, REFRESH_MS);

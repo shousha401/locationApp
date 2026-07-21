@@ -43,6 +43,15 @@
     .card h2 { margin:0; padding:13px 16px; font-size:13px; text-transform:uppercase; letter-spacing:.06em;
       color:var(--muted); border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center; gap:8px; }
     .card .scroll { overflow-x:auto; }
+    /* The full-inventory table is long, so it scrolls inside its own card and
+       keeps its header pinned instead of pushing every other card off-screen. */
+    .card .scroll.tall { max-height:68vh; overflow-y:auto; }
+    .scroll.tall thead th { position:sticky; top:0; z-index:1; background:var(--panel2); }
+    .more { padding:11px 16px; text-align:center; border-top:1px solid var(--line);
+      font-size:12px; color:var(--muted); }
+    .more button { padding:6px 16px; border-radius:8px; border:1px solid var(--line);
+      background:var(--bg); color:var(--accent); cursor:pointer; font-size:12px; margin-left:9px; }
+    .more button:hover { border-color:var(--accent); }
     table { width:100%; border-collapse:collapse; }
     th, td { text-align:left; padding:8px 12px; border-bottom:1px solid var(--line); vertical-align:top; white-space:nowrap; }
     th { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); }
@@ -145,8 +154,14 @@
     </div>
 
     <div class="card">
-      <h2>Oldest inventory <span class="count">longest-sitting pallets</span></h2>
-      <div class="scroll"><table id="oldest"></table></div>
+      <h2>All inventory <span class="count" id="invCount"></span></h2>
+      <div class="filter">
+        <div class="zones" id="invSorts"></div>
+        <input id="invFilter" placeholder="Filter — pallet, item, description, or location" autocomplete="off">
+        <div class="selsum" id="invSum"></div>
+      </div>
+      <div class="scroll tall"><table id="inv"></table></div>
+      <div class="more hidden" id="invMore"></div>
     </div>
 
     <div class="card">
@@ -345,6 +360,98 @@
     });
     $('locFilter').addEventListener('input', () => { renderZones(); renderLocations(); });
 
+    // ── All inventory ─────────────────────────────────────────────────────────
+    // One row per pallet+item, straight from the API. Sorted and filtered here
+    // so the whole list stays in the browser and a manager can hunt a pallet
+    // without a round-trip.
+    const cmpStr = (a, b) => String(a || '').localeCompare(String(b || ''));
+    // Undated pallets sort last in both directions — a missing date is unknown,
+    // not "oldest".
+    const cmpDate = (a, b) => (a === b ? 0 : !a ? 1 : !b ? -1 : a < b ? -1 : 1);
+    const INV_SORTS = [
+      ['old', 'Oldest first', (a, b) => cmpDate(a.date, b.date)],
+      ['new', 'Newest first', (a, b) => cmpDate(b.date, a.date)],
+      ['loc', 'Location', (a, b) => cmpStr(a.locations[0], b.locations[0])],
+      ['item', 'Item', (a, b) => cmpStr(a.item, b.item) || cmpDate(a.date, b.date)],
+      ['pallet', 'Pallet', (a, b) => cmpStr(a.pallet, b.pallet)],
+    ];
+    const INV_PAGE = 200;
+    let INV = [], INV_SORT = 'old', INV_SHOWN = INV_PAGE;
+    // Pallet IDs read as "017 633 246" but get typed without spaces.
+    const squash = (s) => String(s || '').toUpperCase().replace(/\s+/g, '');
+
+    function renderInvSorts() {
+      $('invSorts').innerHTML = INV_SORTS.map(([k, label]) =>
+        `<button class="zbtn ${INV_SORT === k ? 'on' : ''}" data-s="${k}">${esc(label)}</button>`).join('');
+    }
+    $('invSorts').addEventListener('click', (e) => {
+      const b = e.target.closest('.zbtn');
+      if (!b) return;
+      INV_SORT = b.dataset.s; INV_SHOWN = INV_PAGE;
+      renderInvSorts(); renderInventory();
+    });
+
+    function renderInventory() {
+      const raw = $('invFilter').value.trim().toUpperCase();
+      const q = squash(raw);  // pallet/item/location match ignores spacing
+      const rows = q
+        ? INV.filter((p) => squash(p.pallet).includes(q) || squash(p.item).includes(q)
+          || p.locations.some((l) => squash(l).includes(q))
+          || String(p.description || '').toUpperCase().includes(raw))
+        : INV;
+      const sorted = [...rows].sort((INV_SORTS.find((s) => s[0] === INV_SORT) || INV_SORTS[0])[2]);
+
+      $('invCount').textContent = `${fmtInt(rows.length)} of ${fmtInt(INV.length)} pallet lines`;
+
+      // Totals for whatever is filtered — the same read-off-the-zone trick the
+      // locations card does.
+      let red = 0; const cases = new Map(), weight = new Map();
+      for (const p of rows) {
+        if (p.red) red++;
+        for (const c of p.cases || []) cases.set(c.uom, (cases.get(c.uom) || 0) + c.qty);
+        for (const w of p.weight || []) weight.set(w.uom, (weight.get(w.uom) || 0) + w.qty);
+      }
+      const asArr = (m) => [...m.entries()].map(([uom, qty]) => ({ uom, qty }));
+      $('invSum').innerHTML = rows.length
+        ? `Selection: <b>${fmtInt(rows.length)}</b> lines · <b>${wStr(asArr(cases))}</b> · <b>${wStr(asArr(weight))}</b>`
+          + (red ? ` · <span class="redcount">${fmtInt(red)} 🔴 over 6 days</span>` : '')
+        : 'Nothing matches that filter.';
+
+      const page = sorted.slice(0, INV_SHOWN);
+      // "Since" (the tempering clock) is the date managers act on, so it gets
+      // the primary column; received demotes to the small line under the state.
+      $('inv').innerHTML = `
+        <thead><tr><th>Pallet</th><th>Item</th><th>Location</th><th>Since</th><th>State · received</th><th class="num">Cases</th><th class="num">Weight</th></tr></thead>
+        <tbody>${page.map((p) => {
+          const sd = daysSince(p.stateDate);
+          const rd = daysSince(p.date);
+          return `
+          <tr><td class="mono">${esc(p.pallet) || '—'}</td>
+          <td><span class="mono">${esc(p.item)}</span><div class="desc">${esc(p.description)}</div></td>
+          <td class="mono">${p.locations.map((l) => `<a href="/?loc=${encodeURIComponent(l)}">${esc(l)}</a>`).join(' · ') || '—'}</td>
+          <td>${p.stateDate ? `<span class="${p.red ? 'since-late' : ''}">${esc(p.stateDate)}${sd != null ? ` (${fmtInt(sd)}d)` : ''}</span>` : '—'}</td>
+          <td>${p.state ? `<span class="chip ${esc(p.state)}${p.red ? ' late' : ''}">${esc(p.state)}</span>` : '—'}${p.date ? `<div class="desc" style="font-size:10px">received ${esc(p.date)}${rd != null ? ` (${fmtInt(rd)}d)` : ''}</div>` : ''}</td>
+          <td class="num">${wStr(p.cases)}</td>
+          <td class="num">${wStr(p.weight)}</td></tr>`;
+        }).join('')}</tbody>`;
+
+      // Never truncate silently — say how many are held back and offer them.
+      const rest = sorted.length - page.length;
+      $('invMore').classList.toggle('hidden', rest <= 0);
+      if (rest > 0) {
+        $('invMore').innerHTML = `Showing ${fmtInt(page.length)} of ${fmtInt(sorted.length)}.`
+          + `<button data-n="${INV_PAGE}">Show ${fmtInt(Math.min(rest, INV_PAGE))} more</button>`
+          + (rest > INV_PAGE ? '<button data-n="all">Show all</button>' : '');
+      }
+    }
+    $('invMore').addEventListener('click', (e) => {
+      const b = e.target.closest('button');
+      if (!b) return;
+      INV_SHOWN = b.dataset.n === 'all' ? Infinity : INV_SHOWN + Number(b.dataset.n);
+      renderInventory();
+    });
+    $('invFilter').addEventListener('input', () => { INV_SHOWN = INV_PAGE; renderInventory(); });
+
     async function load() {
       let o;
       try { o = await (await fetch('/api/overview')).json(); }
@@ -380,22 +487,11 @@
           <td class="num">${fmtInt(p.pallets)}</td><td class="num">${fmtInt(p.units)}</td>
           <td class="num">${wStr(p.weight)}</td></tr>`).join('')}</tbody>`;
 
-      // "Since" (the tempering clock) is the date managers act on, so it gets
-      // the primary column; received demotes to the small line under the state.
-      $('oldest').innerHTML = `
-        <thead><tr><th>Pallet</th><th>Item</th><th>Location</th><th>Since</th><th>State · received</th><th class="num">Cases</th><th class="num">Weight</th></tr></thead>
-        <tbody>${o.oldestPallets.map((p) => {
-          const sd = daysSince(p.stateDate);
-          const rd = daysSince(p.date);
-          return `
-          <tr><td class="mono">${esc(p.pallet) || '—'}</td>
-          <td><span class="mono">${esc(p.item)}</span><div class="desc">${esc(p.description)}</div></td>
-          <td class="mono"><a href="/?loc=${encodeURIComponent(p.location)}">${esc(p.location)}</a></td>
-          <td>${p.stateDate ? `<span class="${p.red ? 'since-late' : ''}">${esc(p.stateDate)}${sd != null ? ` (${fmtInt(sd)}d)` : ''}</span>` : '—'}</td>
-          <td>${p.state ? `<span class="chip ${esc(p.state)}${p.red ? ' late' : ''}">${esc(p.state)}</span>` : '—'}${p.date ? `<div class="desc" style="font-size:10px">received ${esc(p.date)}${rd != null ? ` (${fmtInt(rd)}d)` : ''}</div>` : ''}</td>
-          <td class="num">${wStr(p.cases)}</td>
-          <td class="num">${wStr(p.weight)}</td></tr>`;
-        }).join('')}</tbody>`;
+      // Deliberately not resetting the filter or the expanded row count here —
+      // the 60s auto-refresh must not yank someone back to the top of the list.
+      INV = o.palletRows || [];
+      renderInvSorts();
+      renderInventory();
 
       renderGroups(o);
 
