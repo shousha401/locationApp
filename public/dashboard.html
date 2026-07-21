@@ -406,17 +406,50 @@
     // Undated pallets sort last in both directions — a missing date is unknown,
     // not "oldest".
     const cmpDate = (a, b) => (a === b ? 0 : !a ? 1 : !b ? -1 : a < b ? -1 : 1);
+    // Sorts run over the grouped rows, so "oldest" means the oldest pallet in
+    // the group — the one that actually needs attention.
     const INV_SORTS = [
       ['old', 'Oldest first', (a, b) => cmpDate(a.date, b.date)],
-      ['new', 'Newest first', (a, b) => cmpDate(b.date, a.date)],
+      ['new', 'Newest first', (a, b) => cmpDate(b.newest, a.newest)],
       ['loc', 'Location', (a, b) => cmpStr(a.locations[0], b.locations[0])],
-      ['item', 'Item', (a, b) => cmpStr(a.item, b.item) || cmpDate(a.date, b.date)],
-      ['pallet', 'Pallet', (a, b) => cmpStr(a.pallet, b.pallet)],
+      ['item', 'Item', (a, b) => cmpStr(a.item, b.item)],
+      ['count', 'Most pallets', (a, b) => b.pallets.length - a.pallets.length || cmpDate(a.date, b.date)],
     ];
     const INV_PAGE = 200;
     let INV = [], INV_SORT = 'old', INV_SHOWN = INV_PAGE;
+    // Which products are expanded to their individual pallets. Kept outside the
+    // render so the 60s auto-refresh doesn't collapse what someone is reading.
+    const INV_OPEN = new Set();
     // Pallet IDs read as "017 633 246" but get typed without spaces.
     const squash = (s) => String(s || '').toUpperCase().replace(/\s+/g, '');
+
+    // One display row per item code, carrying its pallets underneath. The
+    // pallet lines themselves are unchanged — this only folds them for reading.
+    function groupByItem(rows) {
+      const m = new Map();
+      for (const p of rows) {
+        let g = m.get(p.item);
+        if (!g) {
+          g = { item: p.item, description: p.description, pallets: [],
+            locations: [], states: [], cases: new Map(), weight: new Map(),
+            date: null, newest: null, since: null, red: 0 };
+          m.set(p.item, g);
+        }
+        g.pallets.push(p);
+        for (const l of p.locations) if (!g.locations.includes(l)) g.locations.push(l);
+        if (p.state && !g.states.includes(p.state)) g.states.push(p.state);
+        for (const c of p.cases || []) g.cases.set(c.uom, (g.cases.get(c.uom) || 0) + c.qty);
+        for (const w of p.weight || []) g.weight.set(w.uom, (w.qty || 0) + (g.weight.get(w.uom) || 0));
+        if (p.red) g.red++;
+        // The group leads with its OLDEST pallet, so a group can never look
+        // fresher than the worst thing inside it.
+        if (p.date && (!g.date || p.date < g.date)) g.date = p.date;
+        if (p.date && (!g.newest || p.date > g.newest)) g.newest = p.date;
+        if (p.stateDate && (!g.since || p.stateDate < g.since)) g.since = p.stateDate;
+      }
+      for (const g of m.values()) { g.locations.sort(); g.states.sort(); }
+      return [...m.values()];
+    }
 
     function renderInvSorts() {
       $('invSorts').innerHTML = INV_SORTS.map(([k, label]) =>
@@ -437,9 +470,11 @@
           || p.locations.some((l) => squash(l).includes(q))
           || String(p.description || '').toUpperCase().includes(raw))
         : INV;
-      const sorted = [...rows].sort((INV_SORTS.find((s) => s[0] === INV_SORT) || INV_SORTS[0])[2]);
+      const groups = groupByItem(rows);
+      const sorted = groups.sort((INV_SORTS.find((s) => s[0] === INV_SORT) || INV_SORTS[0])[2]);
 
-      $('invCount').textContent = `${fmtInt(rows.length)} of ${fmtInt(INV.length)} pallet lines`;
+      $('invCount').textContent =
+        `${fmtInt(groups.length)} products · ${fmtInt(rows.length)} of ${fmtInt(INV.length)} pallet lines`;
 
       // Totals for whatever is filtered — the same read-off-the-zone trick the
       // locations card does.
@@ -451,37 +486,77 @@
       }
       const asArr = (m) => [...m.entries()].map(([uom, qty]) => ({ uom, qty }));
       $('invSum').innerHTML = rows.length
-        ? `Selection: <b>${fmtInt(rows.length)}</b> lines · <b>${wStr(asArr(cases))}</b> · <b>${wStr(asArr(weight))}</b>`
+        ? `Selection: <b>${fmtInt(groups.length)}</b> products · <b>${fmtInt(rows.length)}</b> pallets · `
+          + `<b>${wStr(asArr(cases))}</b> · <b>${wStr(asArr(weight))}</b>`
           + (red ? ` · <span class="redcount">${fmtInt(red)} 🔴 over 6 days</span>` : '')
         : 'Nothing matches that filter.';
 
       const page = sorted.slice(0, INV_SHOWN);
+      // A filter is a search: collapsing the hit would hide the very pallet
+      // someone just typed the number of, so filtering forces groups open.
+      const forceOpen = q !== '';
       // "Since" (the tempering clock) is the date managers act on, so it gets
       // the primary column; received demotes to the small line under the state.
-      $('inv').innerHTML = `
-        <thead><tr><th>Pallet</th><th>Item</th><th>Location</th><th>Since</th><th>State · received</th><th class="num">Cases</th><th class="num">Weight</th></tr></thead>
-        <tbody>${page.map((p) => {
-          const sd = daysSince(p.stateDate);
-          const rd = daysSince(p.date);
-          return `
+      const palletRow = (p) => {
+        const sd = daysSince(p.stateDate);
+        const rd = daysSince(p.date);
+        return `
           <tr><td class="mono">${esc(p.pallet) || '—'}</td>
-          <td><span class="mono">${esc(p.item)}</span><div class="desc">${esc(p.description)}</div></td>
           <td class="mono">${p.locations.map((l) => `<a href="/?loc=${encodeURIComponent(l)}">${esc(l)}</a>`).join(' · ') || '—'}</td>
           <td>${p.stateDate ? `<span class="${p.red ? 'since-late' : ''}">${esc(p.stateDate)}${sd != null ? ` (${fmtInt(sd)}d)` : ''}</span>` : '—'}</td>
           <td>${p.state ? `<span class="chip ${esc(p.state)}${p.red ? ' late' : ''}">${esc(p.state)}</span>` : '—'}${p.date ? `<div class="desc" style="font-size:10px">received ${esc(p.date)}${rd != null ? ` (${fmtInt(rd)}d)` : ''}</div>` : ''}</td>
           <td class="num">${wStr(p.cases)}</td>
           <td class="num">${wStr(p.weight)}</td></tr>`;
+      };
+
+      $('inv').innerHTML = `
+        <thead><tr><th>Item</th><th class="num">Pallets</th><th>Location</th><th>Oldest since</th>
+          <th>States · oldest received</th><th class="num">Cases</th><th class="num">Weight</th></tr></thead>
+        <tbody>${page.map((g) => {
+          const open = forceOpen || INV_OPEN.has(g.item);
+          const sd = daysSince(g.since);
+          const rd = daysSince(g.date);
+          const locs = g.locations.length <= 2 ? g.locations.join(' · ')
+            : `${g.locations.slice(0, 2).join(' · ')} +${fmtInt(g.locations.length - 2)}`;
+          return `
+          <tr class="click" data-inv="${esc(g.item)}">
+            <td><span class="caret">${open ? '▾' : '▸'}</span><span class="mono">${esc(g.item)}</span>
+              <div class="desc" style="padding-left:11px">${esc(g.description)}</div></td>
+            <td class="num">${fmtInt(g.pallets.length)}${g.red ? ` <span class="redcount">${fmtInt(g.red)}🔴</span>` : ''}</td>
+            <td class="mono">${esc(locs) || '—'}</td>
+            <td>${g.since ? `<span class="${g.red ? 'since-late' : ''}">${esc(g.since)}${sd != null ? ` (${fmtInt(sd)}d)` : ''}</span>` : '—'}</td>
+            <td>${chips(g.states)}${g.date ? `<div class="desc" style="font-size:10px">received ${esc(g.date)}${rd != null ? ` (${fmtInt(rd)}d)` : ''}</div>` : ''}</td>
+            <td class="num">${wStr(asArr(g.cases))}</td>
+            <td class="num">${wStr(asArr(g.weight))}</td>
+          </tr>` + (!open ? '' : `
+          <tr class="lsub" data-invsub="${esc(g.item)}"><td colspan="7">
+            <table class="subtbl">
+              <thead><tr><th>Pallet</th><th>Location</th><th>Since</th><th>State · received</th>
+                <th class="num">Cases</th><th class="num">Weight</th></tr></thead>
+              <tbody>${[...g.pallets].sort((a, b) => cmpDate(a.date, b.date)).map(palletRow).join('')}</tbody>
+            </table>
+          </td></tr>`);
         }).join('')}</tbody>`;
 
       // Never truncate silently — say how many are held back and offer them.
       const rest = sorted.length - page.length;
       $('invMore').classList.toggle('hidden', rest <= 0);
       if (rest > 0) {
-        $('invMore').innerHTML = `Showing ${fmtInt(page.length)} of ${fmtInt(sorted.length)}.`
+        $('invMore').innerHTML = `Showing ${fmtInt(page.length)} of ${fmtInt(sorted.length)} products.`
           + `<button data-n="${INV_PAGE}">Show ${fmtInt(Math.min(rest, INV_PAGE))} more</button>`
           + (rest > INV_PAGE ? '<button data-n="all">Show all</button>' : '');
       }
     }
+    // Click a product to see its individual pallets; the bin links inside still
+    // go through to the feed page.
+    $('inv').addEventListener('click', (e) => {
+      if (e.target.closest('a')) return;
+      const tr = e.target.closest('tr.click');
+      if (!tr) return;
+      const item = tr.dataset.inv;
+      if (INV_OPEN.has(item)) INV_OPEN.delete(item); else INV_OPEN.add(item);
+      renderInventory();
+    });
     $('invMore').addEventListener('click', (e) => {
       const b = e.target.closest('button');
       if (!b) return;
