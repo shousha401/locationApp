@@ -83,7 +83,15 @@
     .selsum b { color:var(--text); }
     .count { font-size:11px; color:var(--muted); text-transform:none; letter-spacing:0; }
     .hidden { display:none; }
-    tr.gsub td { background:var(--panel2); font-size:12px; padding-top:5px; padding-bottom:5px; }
+    tr.gsub td, tr.lsub td { background:var(--panel2); font-size:12px; padding-top:5px; padding-bottom:5px; }
+    /* Inline location breakdown: a nested table so the split-by-product numbers
+       carry their own labels rather than reading as bare figures. */
+    tr.lsub td { padding-left:26px; }
+    .subtbl { width:100%; border-collapse:collapse; }
+    .subtbl th { font-size:10px; padding:2px 10px; color:var(--muted); border-bottom:1px solid var(--line); }
+    .subtbl td { padding:4px 10px; border-bottom:0; white-space:nowrap; }
+    .subtbl tr:hover td { background:transparent; }
+    .caret { display:inline-block; width:11px; color:var(--muted); font-size:10px; }
     .gname { font-weight:700; cursor:pointer; }
     .gedit { padding:2px 10px; border-radius:7px; border:1px solid var(--line); background:none;
       color:var(--muted); cursor:pointer; font-size:11px; margin-left:8px; }
@@ -210,6 +218,9 @@
       return `<span class="${cls}">${esc(d)}${days != null ? ` (${fmtInt(days)}d)` : ''}</span>`;
     };
     let LOCS = [];  // the full per-location list, filtered client-side
+    // Which bins are expanded. Kept outside the render so the 60s auto-refresh
+    // and the zone filter don't collapse what someone is reading.
+    const LOC_OPEN = new Set();
     let O = null;   // last overview payload (feeds the group editor's pick list)
     let ME = { username: '', role: 'viewer' };
 
@@ -342,21 +353,48 @@
       $('locs').innerHTML = `
         <thead><tr><th>Location</th><th class="num">Products</th><th class="num">Pallets</th>
           <th class="num">Units</th><th class="num">Weight</th><th>States</th><th>Oldest</th></tr></thead>
-        <tbody>${rows.map((l) => `
+        <tbody>${rows.map((l) => {
+          const open = LOC_OPEN.has(l.code);
+          const items = l.items || [];
+          return `
           <tr class="click" data-loc="${esc(l.code)}">
-            <td class="mono"><a href="/?loc=${encodeURIComponent(l.code)}">${esc(l.code)}</a></td>
+            <td class="mono"><span class="caret">${open ? '▾' : '▸'}</span><a href="/?loc=${encodeURIComponent(l.code)}">${esc(l.code)}</a></td>
             <td class="num">${fmtInt(l.products)}</td>
             <td class="num">${fmtInt(l.pallets)}</td>
             <td class="num">${fmtInt(l.units)}</td>
             <td class="num">${wStr(l.weight)}</td>
             <td>${chips(l.states)}</td>
             <td>${ageCell(l.oldest)}</td>
-          </tr>`).join('')}</tbody>`;
+          </tr>` + (!open ? '' : `
+          <tr class="lsub" data-lsub="${esc(l.code)}"><td colspan="7">
+            ${items.length ? `<table class="subtbl">
+              <thead><tr><th>Item</th><th class="num">Pallets</th><th class="num">Units</th>
+                <th class="num">Cases</th><th class="num">Weight</th><th>States</th><th>Oldest</th></tr></thead>
+              <tbody>${items.map((i) => `
+                <tr><td><span class="mono">${esc(i.item)}</span> <span class="desc">${esc(i.description)}</span></td>
+                <td class="num">${fmtInt(i.pallets)}</td>
+                <td class="num">${fmtInt(i.units)}</td>
+                <td class="num">${wStr(i.cases)}</td>
+                <td class="num">${wStr(i.weight)}</td>
+                <td>${chips(i.states)}${i.red ? ' <span class="redcount">🔴</span>' : ''}</td>
+                <td>${ageCell(i.oldest)}</td></tr>`).join('')}</tbody></table>`
+            : '<span class="desc">Nothing in this bin.</span>'}
+            ${items.length && items.reduce((a, i) => a + i.pallets, 0) !== l.pallets
+              ? `<div class="desc" style="padding:5px 10px 0">Per-product pallet counts add up to more than
+                 the ${fmtInt(l.pallets)} in this bin — a pallet here carries more than one product.</div>`
+              : ''}
+          </td></tr>`);
+        }).join('')}</tbody>`;
     }
-    // Whole-row click → the feed page on that bin (the link inside works too).
+    // Row click opens the breakdown in place; the location code itself still
+    // links through to the feed page for the serial-level detail.
     $('locs').addEventListener('click', (e) => {
+      if (e.target.closest('a')) return;
       const tr = e.target.closest('tr.click');
-      if (tr && !e.target.closest('a')) location.href = '/?loc=' + encodeURIComponent(tr.dataset.loc);
+      if (!tr) return;
+      const code = tr.dataset.loc;
+      if (LOC_OPEN.has(code)) LOC_OPEN.delete(code); else LOC_OPEN.add(code);
+      renderLocations();
     });
     $('locFilter').addEventListener('input', () => { renderZones(); renderLocations(); });
 

@@ -325,7 +325,8 @@ function overview(groupDefs) {
 
   for (const [code, rows] of snap.byLocation) {
     const loc = { code, products: new Set(), pallets: new Set(), units: rows.length,
-      weight: new Map(), states: new Set(), oldest: null };
+      weight: new Map(), states: new Set(), oldest: null,
+      items: new Map() }; // item -> the per-product breakdown the dashboard expands inline
     for (const r of rows) {
       units++;
       allProducts.add(r.item); loc.products.add(r.item);
@@ -346,6 +347,22 @@ function overview(groupDefs) {
         products.set(r.item, p);
       }
       p.units++; if (r.pallet) p.pallets.add(r.pallet); addW(p.weight, r.varUom, r.varQty);
+
+      // Same numbers as the location row, split by product — so "3 products,
+      // 2 pallets" can be opened where it's read instead of loading the feed
+      // page for every bin.
+      let li = loc.items.get(r.item);
+      if (!li) {
+        li = { item: r.item, description: snap.itemDesc.get(r.item) || '', units: 0,
+          pallets: new Set(), cases: new Map(), weight: new Map(),
+          states: new Set(), oldest: null, red: false };
+        loc.items.set(r.item, li);
+      }
+      li.units++; if (r.pallet) li.pallets.add(r.pallet);
+      addW(li.cases, r.baseUom, r.baseQty); addW(li.weight, r.varUom, r.varQty);
+      li.states.add(st);
+      if (r.date && (!li.oldest || r.date < li.oldest)) li.oldest = r.date;
+      if (isRed(r)) li.red = true;
 
       // One row per pallet+item. The same pallet can carry two products (two
       // rows) and — rarely — one pallet+item can straddle two bins, so the
@@ -381,6 +398,13 @@ function overview(groupDefs) {
     locations.push({
       code, products: loc.products.size, pallets: loc.pallets.size, units: loc.units,
       weight: wArr(loc.weight), states: [...loc.states].sort(), oldest: loc.oldest,
+      items: [...loc.items.values()]
+        .sort((a, b) => (a.item < b.item ? -1 : a.item > b.item ? 1 : 0))
+        .map((i) => ({
+          item: i.item, description: i.description, units: i.units, pallets: i.pallets.size,
+          cases: wArr(i.cases), weight: wArr(i.weight),
+          states: [...i.states].sort(), oldest: i.oldest, red: i.red,
+        })),
     });
   }
   locations.sort((a, b) => (a.code < b.code ? -1 : 1));
