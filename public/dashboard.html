@@ -36,17 +36,17 @@
     .tile b { display:block; font-size:24px; line-height:1.2; }
     .tile span { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.05em; }
 
-    .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:20px; align-items:start; margin-bottom:20px; }
-    @media (max-width:900px){ .grid2 { grid-template-columns:1fr; } }
-
     .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; overflow:hidden; margin-bottom:20px; }
     .card h2 { margin:0; padding:13px 16px; font-size:13px; text-transform:uppercase; letter-spacing:.06em;
       color:var(--muted); border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center; gap:8px; }
     .card .scroll { overflow-x:auto; }
-    /* The full-inventory table is long, so it scrolls inside its own card and
-       keeps its header pinned instead of pushing every other card off-screen. */
-    .card .scroll.tall { max-height:68vh; overflow-y:auto; }
+    /* All inventory is the point of this page, so it takes whatever the viewport
+       has left, keeps its header pinned, and ⛶ hands it the entire screen. */
+    .card .scroll.tall { max-height:calc(100vh - 250px); min-height:420px; overflow-y:auto; }
     .scroll.tall thead th { position:sticky; top:0; z-index:1; background:var(--panel2); }
+    .card.zoom { position:fixed; inset:0; z-index:40; margin:0; border-radius:0;
+      display:flex; flex-direction:column; }
+    .card.zoom .scroll.tall { flex:1 1 auto; max-height:none; min-height:0; }
     .more { padding:11px 16px; text-align:center; border-top:1px solid var(--line);
       font-size:12px; color:var(--muted); }
     .more button { padding:6px 16px; border-radius:8px; border:1px solid var(--line);
@@ -83,7 +83,7 @@
     .selsum b { color:var(--text); }
     .count { font-size:11px; color:var(--muted); text-transform:none; letter-spacing:0; }
     .hidden { display:none; }
-    tr.gsub td, tr.lsub td { background:var(--panel2); font-size:12px; padding-top:5px; padding-bottom:5px; }
+    tr.lsub td { background:var(--panel2); font-size:12px; padding-top:5px; padding-bottom:5px; }
     /* Inline location breakdown: a nested table so the split-by-product numbers
        carry their own labels rather than reading as bare figures. */
     tr.lsub td { padding-left:26px; }
@@ -93,6 +93,13 @@
     .subtbl tr:hover td { background:transparent; }
     .caret { display:inline-block; width:11px; color:var(--muted); font-size:10px; }
     .gname { font-weight:700; cursor:pointer; }
+    /* Manager groups ride at the top of All inventory under their own name, so
+       a named family reads as one line before the products it is made of. */
+    tr.grp td { background:#16283c; }
+    tr.grp .gname { color:var(--accent2); }
+    tr.sechead td { background:var(--panel2); font-size:10px; text-transform:uppercase;
+      letter-spacing:.06em; color:var(--muted); padding:5px 12px; }
+    .subtbl tr.gone td { color:var(--muted); opacity:.65; }
     .gedit { padding:2px 10px; border-radius:7px; border:1px solid var(--line); background:none;
       color:var(--muted); cursor:pointer; font-size:11px; margin-left:8px; }
     .gedit:hover { border-color:var(--accent); color:var(--accent); }
@@ -142,27 +149,11 @@
 
     <div class="tiles" id="tiles"></div>
 
-    <div class="grid2">
-      <div class="card">
-        <h2>State mix <span class="count">frozen → temp pipeline</span></h2>
-        <div class="scroll"><table id="states"></table></div>
-      </div>
-      <div class="card">
-        <h2>Biggest products <span class="count">by pallets on hand</span></h2>
-        <div class="scroll"><table id="products"></table></div>
-      </div>
-    </div>
-
-    <div class="card">
-      <h2>Product groups
-        <span><button class="zbtn hidden" id="newGroup">＋ New group</button></span></h2>
-      <div class="scroll"><table id="groupsTbl"></table></div>
-      <div class="empty hidden" id="groupsEmpty">No groups yet.
-        Editors can press <b>＋ New group</b> to name a set of products and watch them as one line.</div>
-    </div>
-
-    <div class="card">
-      <h2>All inventory <span class="count" id="invCount"></span></h2>
+    <div class="card" id="invCard">
+      <h2>All inventory <span class="count" id="invCount"></span>
+        <span class="grow"></span>
+        <span><button class="zbtn hidden" id="newGroup">＋ New group</button>
+          <button class="zbtn" id="invZoom">⛶ Full screen</button></span></h2>
       <div class="filter">
         <div class="zones" id="invSorts"></div>
         <input id="invFilter" placeholder="Filter — pallet, item, description, or location" autocomplete="off">
@@ -204,6 +195,22 @@
     const fmtQty = (n) => (Math.abs(n % 1) < 1e-9 ? Math.round(n).toLocaleString()
       : n.toLocaleString(undefined, { maximumFractionDigits: 2 }));
     const wStr = (w) => (w && w.length ? w.map((x) => `${fmtQty(x.qty)} ${esc(x.uom)}`).join(' · ') : '—');
+    const asArr = (m) => [...m.entries()].map(([uom, qty]) => ({ uom, qty }));
+    // Two bins fit the column; past that say how many more rather than wrapping.
+    const locSummary = (ls) => (ls.length <= 2 ? ls.join(' · ')
+      : `${ls.slice(0, 2).join(' · ')} +${fmtInt(ls.length - 2)}`);
+    // The item codes a group is actually made of, spelled out under its name —
+    // a count alone ("2 of 2 products") never says WHICH two.
+    const GRP_CODES_SHOWN = 8;
+    const gonePhrase = (g) => (g.filtered ? 'not shown' : 'not on hand');
+    function codeList(g) {
+      const shown = g.products.slice(0, GRP_CODES_SHOWN)
+        .map((p) => `<span class="mono">${esc(p.item)}</span>`).join(' · ');
+      const rest = g.products.length - Math.min(g.products.length, GRP_CODES_SHOWN);
+      return (shown || `<i>nothing ${gonePhrase(g)}</i>`)
+        + (rest ? ` +${fmtInt(rest)} more` : '')
+        + (g.missing.length ? ` · ${fmtInt(g.missing.length)} ${gonePhrase(g)}` : '');
+    }
     const chips = (states) => (states || []).map((s) => `<span class="chip ${esc(s)}">${esc(s)}</span>`).join('');
     function daysSince(dateStr) {
       if (!dateStr) return null;
@@ -222,50 +229,17 @@
     // and the zone filter don't collapse what someone is reading.
     const LOC_OPEN = new Set();
     let O = null;   // last overview payload (feeds the group editor's pick list)
+    let GROUPS = []; // manager groups: { id, name, items } — folded client-side
+    // item code -> description, for group members with nothing on hand: they
+    // have no pallet line to carry a description of their own.
+    let DESCS = new Map();
+    const descOf = (c) => DESCS.get(c) || '';
     let ME = { username: '', role: 'viewer' };
 
     // ── Product groups ────────────────────────────────────────────────────────
-    function renderGroups(o) {
-      O = o;
-      const isMgr = ME.role === 'editor' || ME.role === 'admin';
-      $('newGroup').classList.toggle('hidden', !isMgr);
-      const gs = o.groups || [];
-      $('groupsEmpty').classList.toggle('hidden', !!gs.length);
-      if (!gs.length) { $('groupsTbl').innerHTML = ''; return; }
-      $('groupsTbl').innerHTML = `
-        <thead><tr><th>Group</th><th class="num">Products</th><th class="num">Pallets</th>
-          <th class="num">Cases</th><th class="num">Weight</th><th class="num">Red</th><th></th></tr></thead>
-        <tbody>${gs.map((g) => `
-          <tr class="click" data-g="${g.id}">
-            <td class="gname">${esc(g.name)}</td>
-            <td class="num">${fmtInt(g.presentItems)} of ${fmtInt(g.items.length)}</td>
-            <td class="num">${fmtInt(g.pallets)}</td>
-            <td class="num">${wStr(g.cases)}</td>
-            <td class="num">${wStr(g.weight)}</td>
-            <td class="num">${g.redPallets ? `<span class="redcount">${fmtInt(g.redPallets)} 🔴</span>` : '—'}</td>
-            <td>${isMgr ? `<button class="gedit" data-edit="${g.id}">edit</button>` : ''}</td>
-          </tr>
-          <tr class="gsub hidden" data-sub="${g.id}"><td colspan="7">
-            ${g.perItem.length ? g.perItem.map((i) => `
-              <div style="display:flex;gap:14px;flex-wrap:wrap;padding:2px 0">
-                <span class="mono" style="min-width:64px">${esc(i.item)}</span>
-                <span class="desc" style="flex:1;min-width:180px">${esc(i.description)}</span>
-                <span>${fmtInt(i.pallets)} plt</span><span>${wStr(i.cases)}</span><span>${wStr(i.weight)}</span>
-                <span>${i.red ? `<span class="redcount">${fmtInt(i.red)} 🔴</span>` : ''}</span>
-              </div>`).join('')
-            : '<span class="desc">None of these products are in GT right now.</span>'}
-          </td></tr>`).join('')}</tbody>`;
-    }
-    $('groupsTbl').addEventListener('click', (e) => {
-      const ed = e.target.closest('[data-edit]');
-      if (ed) { openEditor(Number(ed.dataset.edit)); return; }
-      const tr = e.target.closest('tr[data-g]');
-      if (tr) {
-        const sub = $('groupsTbl').querySelector(`tr[data-sub="${tr.dataset.g}"]`);
-        if (sub) sub.classList.toggle('hidden');
-      }
-    });
-
+    // Groups no longer get their own card — they ride at the top of All
+    // inventory (see renderInventory), so a named family and the products it is
+    // made of are read on one screen. This file only keeps the editor.
     let EDIT_ID = null;
     function openEditor(id) {
       const g = id != null ? (O.groups || []).find((x) => x.id === id) : null;
@@ -291,7 +265,12 @@
     const closeEditor = () => $('gmodal').classList.remove('on');
     $('gcancel').addEventListener('click', closeEditor);
     $('gmodal').addEventListener('click', (e) => { if (e.target.id === 'gmodal') closeEditor(); });
-    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeEditor(); });
+    // Escape backs out one layer at a time: the editor first, then full screen.
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape') return;
+      if ($('gmodal').classList.contains('on')) closeEditor();
+      else setZoom(false);
+    });
     $('newGroup').addEventListener('click', () => openEditor(null));
 
     $('gsave').addEventListener('click', async () => {
@@ -420,35 +399,65 @@
     // Which products are expanded to their individual pallets. Kept outside the
     // render so the 60s auto-refresh doesn't collapse what someone is reading.
     const INV_OPEN = new Set();
+    // Which named groups are expanded to the products inside them.
+    const GRP_OPEN = new Set();
     // Pallet IDs read as "017 633 246" but get typed without spaces.
     const squash = (s) => String(s || '').toUpperCase().replace(/\s+/g, '');
 
-    // One display row per item code, carrying its pallets underneath. The
-    // pallet lines themselves are unchanged — this only folds them for reading.
-    function groupByItem(rows) {
-      const m = new Map();
+    // Fold a set of pallet lines into one summary. Used for both a single
+    // product and a manager's named group, so a group line can never be read on
+    // a different basis than the products under it.
+    function foldPallets(rows) {
+      const g = { pallets: [], locations: [], states: [], cases: new Map(), weight: new Map(),
+        date: null, newest: null, since: null, red: 0 };
       for (const p of rows) {
-        let g = m.get(p.item);
-        if (!g) {
-          g = { item: p.item, description: p.description, pallets: [],
-            locations: [], states: [], cases: new Map(), weight: new Map(),
-            date: null, newest: null, since: null, red: 0 };
-          m.set(p.item, g);
-        }
         g.pallets.push(p);
         for (const l of p.locations) if (!g.locations.includes(l)) g.locations.push(l);
         if (p.state && !g.states.includes(p.state)) g.states.push(p.state);
         for (const c of p.cases || []) g.cases.set(c.uom, (g.cases.get(c.uom) || 0) + c.qty);
         for (const w of p.weight || []) g.weight.set(w.uom, (w.qty || 0) + (g.weight.get(w.uom) || 0));
         if (p.red) g.red++;
-        // The group leads with its OLDEST pallet, so a group can never look
-        // fresher than the worst thing inside it.
+        // A fold leads with its OLDEST pallet, so it can never look fresher than
+        // the worst thing inside it.
         if (p.date && (!g.date || p.date < g.date)) g.date = p.date;
         if (p.date && (!g.newest || p.date > g.newest)) g.newest = p.date;
         if (p.stateDate && (!g.since || p.stateDate < g.since)) g.since = p.stateDate;
       }
-      for (const g of m.values()) { g.locations.sort(); g.states.sort(); }
-      return [...m.values()];
+      g.locations.sort(); g.states.sort();
+      return g;
+    }
+
+    // One display row per item code, carrying its pallets underneath. The
+    // pallet lines themselves are unchanged — this only folds them for reading.
+    function groupByItem(rows) {
+      const m = new Map();
+      for (const p of rows) {
+        let a = m.get(p.item);
+        if (!a) { a = []; m.set(p.item, a); }
+        a.push(p);
+      }
+      return [...m.entries()].map(([item, ps]) =>
+        Object.assign({ item, description: ps[0].description }, foldPallets(ps)));
+    }
+
+    // A manager group folded over whatever is currently in view. Groups whose
+    // products are all filtered out drop off rather than showing as empty
+    // lines; with no filter every group stays visible, zeroes included.
+    function namedGroups(rows, filtering) {
+      return (GROUPS || []).map((g) => {
+        const want = new Set(g.items);
+        const mine = rows.filter((p) => want.has(p.item));
+        const products = groupByItem(mine).sort((a, b) => cmpStr(a.item, b.item));
+        // Codes in the group with nothing to show — named, not just counted, so
+        // "3 of 4" never leaves someone guessing which one is missing. Under a
+        // filter these are "not shown" rather than "not on hand": the filter is
+        // hiding stock that exists, and saying otherwise would be a lie.
+        const here = new Set(products.map((p) => p.item));
+        const missing = g.items.filter((c) => !here.has(c)).sort(cmpStr);
+        return Object.assign({ id: g.id, name: g.name, total: g.items.length,
+          products, missing, filtered: filtering }, foldPallets(mine));
+      }).filter((g) => !filtering || g.products.length)
+        .sort((a, b) => cmpStr(a.name, b.name));
     }
 
     function renderInvSorts() {
@@ -484,7 +493,6 @@
         for (const c of p.cases || []) cases.set(c.uom, (cases.get(c.uom) || 0) + c.qty);
         for (const w of p.weight || []) weight.set(w.uom, (weight.get(w.uom) || 0) + w.qty);
       }
-      const asArr = (m) => [...m.entries()].map(([uom, qty]) => ({ uom, qty }));
       $('invSum').innerHTML = rows.length
         ? `Selection: <b>${fmtInt(groups.length)}</b> products · <b>${fmtInt(rows.length)}</b> pallets · `
           + `<b>${wStr(asArr(cases))}</b> · <b>${wStr(asArr(weight))}</b>`
@@ -509,15 +517,55 @@
           <td class="num">${wStr(p.weight)}</td></tr>`;
       };
 
+      // A group is the same fold as a product, so it prints the same seven
+      // columns — a manager reads "Grassfed" exactly the way they read an item.
+      const named = namedGroups(rows, q !== '');
+      const isMgr = ME.role === 'editor' || ME.role === 'admin';
+      const grpRows = named.map((g) => {
+        const open = GRP_OPEN.has(g.id);
+        const sd = daysSince(g.since);
+        const rd = daysSince(g.date);
+        return `
+          <tr class="click grp" data-grp="${g.id}">
+            <td><span class="caret">${open ? '▾' : '▸'}</span><span class="gname">${esc(g.name)}</span>
+              ${isMgr ? `<button class="gedit" data-edit="${g.id}">edit</button>` : ''}
+              <div class="desc" style="padding-left:11px">${codeList(g)}</div></td>
+            <td class="num">${fmtInt(g.pallets.length)}${g.red ? ` <span class="redcount">${fmtInt(g.red)}🔴</span>` : ''}</td>
+            <td class="mono">${esc(locSummary(g.locations)) || '—'}</td>
+            <td>${g.since ? `<span class="${g.red ? 'since-late' : ''}">${esc(g.since)}${sd != null ? ` (${fmtInt(sd)}d)` : ''}</span>` : '—'}</td>
+            <td>${chips(g.states)}${g.date ? `<div class="desc" style="font-size:10px">received ${esc(g.date)}${rd != null ? ` (${fmtInt(rd)}d)` : ''}</div>` : ''}</td>
+            <td class="num">${wStr(asArr(g.cases))}</td>
+            <td class="num">${wStr(asArr(g.weight))}</td>
+          </tr>` + (!open ? '' : `
+          <tr class="lsub" data-grpsub="${g.id}"><td colspan="7">
+            ${g.products.length ? `<table class="subtbl">
+              <thead><tr><th>Item</th><th class="num">Pallets</th><th>Location</th><th>Oldest since</th>
+                <th>States</th><th class="num">Cases</th><th class="num">Weight</th></tr></thead>
+              <tbody>${g.products.map((i) => `
+                <tr><td><span class="mono">${esc(i.item)}</span> <span class="desc">${esc(i.description)}</span></td>
+                <td class="num">${fmtInt(i.pallets.length)}${i.red ? ` <span class="redcount">${fmtInt(i.red)}🔴</span>` : ''}</td>
+                <td class="mono">${esc(locSummary(i.locations)) || '—'}</td>
+                <td>${i.since ? `<span class="${i.red ? 'since-late' : ''}">${esc(i.since)}</span>` : '—'}</td>
+                <td>${chips(i.states)}</td>
+                <td class="num">${wStr(asArr(i.cases))}</td>
+                <td class="num">${wStr(asArr(i.weight))}</td></tr>`).join('')}
+              ${g.missing.map((c) => `
+                <tr class="gone"><td><span class="mono">${esc(c)}</span>
+                  <span class="desc">${esc(descOf(c))}</span></td>
+                <td class="num">0</td><td colspan="5">${gonePhrase(g)}</td></tr>`).join('')}</tbody></table>`
+            : '<span class="desc">None of these products are in GT right now.</span>'}
+          </td></tr>`);
+      }).join('');
+
       $('inv').innerHTML = `
         <thead><tr><th>Item</th><th class="num">Pallets</th><th>Location</th><th>Oldest since</th>
           <th>States · oldest received</th><th class="num">Cases</th><th class="num">Weight</th></tr></thead>
-        <tbody>${page.map((g) => {
+        <tbody>${grpRows}${named.length ? `
+        <tr class="sechead"><td colspan="7">Every product</td></tr>` : ''}${page.map((g) => {
           const open = forceOpen || INV_OPEN.has(g.item);
           const sd = daysSince(g.since);
           const rd = daysSince(g.date);
-          const locs = g.locations.length <= 2 ? g.locations.join(' · ')
-            : `${g.locations.slice(0, 2).join(' · ')} +${fmtInt(g.locations.length - 2)}`;
+          const locs = locSummary(g.locations);
           return `
           <tr class="click" data-inv="${esc(g.item)}">
             <td><span class="caret">${open ? '▾' : '▸'}</span><span class="mono">${esc(g.item)}</span>
@@ -547,14 +595,21 @@
           + (rest > INV_PAGE ? '<button data-n="all">Show all</button>' : '');
       }
     }
-    // Click a product to see its individual pallets; the bin links inside still
-    // go through to the feed page.
+    // Click a product to see its individual pallets, or a group to see the
+    // products in it; the bin links inside still go through to the feed page.
     $('inv').addEventListener('click', (e) => {
       if (e.target.closest('a')) return;
+      const ed = e.target.closest('[data-edit]');
+      if (ed) { openEditor(Number(ed.dataset.edit)); return; }
       const tr = e.target.closest('tr.click');
       if (!tr) return;
-      const item = tr.dataset.inv;
-      if (INV_OPEN.has(item)) INV_OPEN.delete(item); else INV_OPEN.add(item);
+      if (tr.dataset.grp) {
+        const id = Number(tr.dataset.grp);
+        if (GRP_OPEN.has(id)) GRP_OPEN.delete(id); else GRP_OPEN.add(id);
+      } else {
+        const item = tr.dataset.inv;
+        if (INV_OPEN.has(item)) INV_OPEN.delete(item); else INV_OPEN.add(item);
+      }
       renderInventory();
     });
     $('invMore').addEventListener('click', (e) => {
@@ -564,6 +619,16 @@
       renderInventory();
     });
     $('invFilter').addEventListener('input', () => { INV_SHOWN = INV_PAGE; renderInventory(); });
+
+    // ⛶ hands the card the whole viewport — the list is what people stand and
+    // read off a wall screen, so it needs to lose the page around it.
+    function setZoom(on) {
+      $('invCard').classList.toggle('zoom', on);
+      $('invZoom').textContent = on ? '⤡ Exit full screen' : '⛶ Full screen';
+      $('invZoom').classList.toggle('on', on);
+      document.body.style.overflow = on ? 'hidden' : '';
+    }
+    $('invZoom').addEventListener('click', () => setZoom(!$('invCard').classList.contains('zoom')));
 
     async function load() {
       let o;
@@ -586,27 +651,15 @@
         [wStr(o.totals.weight), 'Total weight'],
       ].map(([b, s]) => `<div class="tile"><b>${b}</b><span>${s}</span></div>`).join('');
 
-      $('states').innerHTML = `
-        <thead><tr><th>State</th><th class="num">Pallets</th><th class="num">Units</th><th class="num">Weight</th></tr></thead>
-        <tbody>${o.states.map((s) => `
-          <tr><td><span class="chip ${esc(s.state)}">${esc(s.state)}</span></td>
-          <td class="num">${fmtInt(s.pallets)}</td><td class="num">${fmtInt(s.units)}</td>
-          <td class="num">${wStr(s.weight)}</td></tr>`).join('')}</tbody>`;
-
-      $('products').innerHTML = `
-        <thead><tr><th>Item</th><th class="num">Pallets</th><th class="num">Units</th><th class="num">Weight</th></tr></thead>
-        <tbody>${o.topProducts.map((p) => `
-          <tr><td><span class="mono">${esc(p.item)}</span><div class="desc">${esc(p.description)}</div></td>
-          <td class="num">${fmtInt(p.pallets)}</td><td class="num">${fmtInt(p.units)}</td>
-          <td class="num">${wStr(p.weight)}</td></tr>`).join('')}</tbody>`;
-
       // Deliberately not resetting the filter or the expanded row count here —
       // the 60s auto-refresh must not yank someone back to the top of the list.
+      O = o;
+      GROUPS = o.groups || [];
+      DESCS = new Map((o.allProducts || []).map((p) => [p.item, p.description]));
+      $('newGroup').classList.toggle('hidden', !(ME.role === 'editor' || ME.role === 'admin'));
       INV = o.palletRows || [];
       renderInvSorts();
       renderInventory();
-
-      renderGroups(o);
 
       LOCS = o.locations || [];
       renderZones();
