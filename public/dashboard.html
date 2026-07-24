@@ -117,6 +117,22 @@
     .plan .dest { color:var(--accent2); font-weight:700; }
     .plan .dest a { color:var(--accent2); }
     .plan .none { color:var(--muted); font-size:13px; }
+    /* Message from the manager — reuses the plan strip's frame. */
+    .plan.msg h3 { display:flex; align-items:center; gap:10px; }
+    .plan.msg .msgdate { text-transform:none; letter-spacing:0; color:var(--muted); font-weight:400; }
+    .plan.msg .mbtn.edit { margin-left:auto; }
+    .msgbody { font-size:16px; line-height:1.55; white-space:pre-wrap; color:var(--text); }
+    .msgby { margin-top:9px; font-size:11px; color:var(--muted); }
+    .plan.msg textarea { width:100%; min-height:90px; margin:2px 0 0; padding:11px 12px; font:inherit;
+      font-size:15px; border-radius:9px; border:1px solid var(--line); background:var(--panel2);
+      color:var(--text); resize:vertical; }
+    .plan.msg textarea:focus { outline:none; border-color:var(--accent2); }
+    .msgact { display:flex; gap:8px; justify-content:flex-end; margin-top:10px; }
+    .mbtn { padding:7px 15px; border-radius:8px; cursor:pointer; font-size:13px; font-weight:700;
+      border:1px solid var(--line); background:var(--panel2); color:var(--text); }
+    .mbtn.save { background:var(--accent2); color:#04222f; border-color:var(--accent2); }
+    .mbtn.edit { font-size:12px; font-weight:600; }
+    .mbtn.cancel { background:none; color:var(--muted); }
     /* The same instruction, repeated on the group's own line — someone reading
        All inventory shouldn't have to scroll back up to learn where it goes. */
     .today-dest { color:var(--accent2); font-weight:700; margin-left:9px; white-space:nowrap; }
@@ -214,9 +230,6 @@
     <h3 id="gtitle">New group</h3>
     <input type="text" id="gname" placeholder="Group name — what the floor calls these" maxlength="60">
     <div class="picklist" id="gpick"></div>
-    <h4>Where does it go? <span>— a bin, or whatever the floor calls the place. Leave a day blank if it doesn't move.</span></h4>
-    <div class="days" id="gdays"></div>
-    <datalist id="loclist"></datalist>
     <div class="gerr" id="gerrbox"></div>
     <div class="gactions">
       <button class="gdelete hidden" id="gdel">Delete group</button>
@@ -270,23 +283,59 @@
     const planOf = (g) => (g && g.plan) || {};
     const destToday = (g) => planOf(g)[todayKey()] || '';
 
-    // Today's moves, straight off the group list — deliberately NOT off the
-    // filtered inventory rows: what someone typed in the filter box, and whether
-    // a group happens to have stock right now, must never change the day's
-    // instructions.
-    function renderPlan() {
-      const k = todayKey();
-      const moves = (GROUPS || []).filter((g) => destToday(g))
-        .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+    // ── Message from the manager ────────────────────────────────────────────────
+    // One global note the manager leaves for the whole floor. Editors and admins
+    // write it; viewers read it. Replaced the per-group weekly move schedule.
+    let MSG = { text: '', updatedBy: null, updatedAt: null };
+    let MSG_EDIT = false;
+    const todayLong = () => new Date().toLocaleDateString(undefined,
+      { weekday: 'long', month: 'short', day: 'numeric', year: 'numeric' });
+
+    function renderMessage() {
       const isMgr = ME.role === 'editor' || ME.role === 'admin';
-      $('planStrip').innerHTML = `<div class="plan">
-        <h3>📋 Today · ${DAY_FULL[k]}</h3>
-        ${moves.length
-          ? `<ul>${moves.map((g) => `<li>${esc(g.name)}<span class="to">→</span>`
-            + `<span class="dest">${destHtml(destToday(g))}</span></li>`).join('')}</ul>`
-          : `<div class="none">Nothing is scheduled to move today.`
-            + `${isMgr ? ' Open a group below and press <b>edit</b> to set its week.' : ''}</div>`}
-      </div>`;
+      const text = (MSG.text || '').trim();
+      const stamp = MSG.updatedAt
+        ? `<div class="msgby">— ${esc(MSG.updatedBy || '?')}, ${new Date(MSG.updatedAt).toLocaleString()}</div>` : '';
+
+      if (MSG_EDIT && isMgr) {
+        $('planStrip').innerHTML = `<div class="plan msg">
+          <h3>📋 Message from the manager <span class="msgdate">${esc(todayLong())}</span></h3>
+          <textarea id="msgText" maxlength="2000" placeholder="Leave a note for the floor…">${esc(MSG.text || '')}</textarea>
+          <div class="msgact">
+            <button class="mbtn cancel" id="msgCancel">Cancel</button>
+            <button class="mbtn save" id="msgSave">Save message</button>
+          </div>`;
+        $('msgText').focus();
+        $('msgCancel').addEventListener('click', () => { MSG_EDIT = false; renderMessage(); });
+        $('msgSave').addEventListener('click', saveMessage);
+        return;
+      }
+
+      $('planStrip').innerHTML = `<div class="plan msg">
+        <h3>📋 Message from the manager <span class="msgdate">${esc(todayLong())}</span>
+          ${isMgr ? `<button class="mbtn edit" id="msgEdit">${text ? '✎ Edit' : '＋ Add message'}</button>` : ''}</h3>
+        ${text
+          ? `<div class="msgbody">${esc(text).replace(/\n/g, '<br>')}</div>${stamp}`
+          : `<div class="none">${isMgr ? 'No message yet — press “Add message” to leave one for the floor.'
+              : 'No message from the manager right now.'}</div>`}`;
+      if (isMgr) $('msgEdit').addEventListener('click', () => { MSG_EDIT = true; renderMessage(); });
+    }
+
+    async function saveMessage() {
+      const btn = $('msgSave'); btn.disabled = true; btn.textContent = 'Saving…';
+      try {
+        const res = await fetch('/api/message', {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: $('msgText').value }),
+        });
+        if (!res.ok) throw new Error();
+        MSG = await res.json();
+        MSG_EDIT = false;
+        renderMessage();
+      } catch (_) {
+        btn.disabled = false; btn.textContent = 'Save message';
+        alert('Could not save the message — are you still signed in as a manager?');
+      }
     }
     function daysSince(dateStr) {
       if (!dateStr) return null;
@@ -336,13 +385,6 @@
         + extras.map((c) => `
         <label class="pick"><input type="checkbox" value="${esc(c)}" checked>
           <span class="mono">${esc(c)}</span><span class="desc">not in GT right now</span></label>`).join('');
-      // The standing week. Today's row is highlighted so a manager editing the
-      // plan can see at a glance what the floor is being told right now.
-      const plan = planOf(g), tk = todayKey();
-      $('gdays').innerHTML = DAYS.map(([k, label]) => `
-        <label class="dayrow ${k === tk ? 'today' : ''}"><span>${label}</span>
-          <input type="text" data-day="${k}" list="loclist" maxlength="60"
-            value="${esc(plan[k] || '')}" placeholder="doesn't move"></label>`).join('');
       $('gmodal').classList.add('on');
     }
     const closeEditor = () => $('gmodal').classList.remove('on');
@@ -359,14 +401,10 @@
     $('gsave').addEventListener('click', async () => {
       const name = $('gname').value.trim();
       const items = [...$('gpick').querySelectorAll('input:checked')].map((i) => i.value);
-      // Blanks are sent through as blanks: the server drops them, which is how a
-      // manager clears a day they no longer want the floor moving stock on.
-      const plan = {};
-      for (const i of $('gdays').querySelectorAll('input[data-day]')) plan[i.dataset.day] = i.value.trim();
       const url = EDIT_ID != null ? '/api/groups/' + EDIT_ID : '/api/groups';
       const res = await fetch(url, {
         method: EDIT_ID != null ? 'PUT' : 'POST',
-        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, items, plan }),
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, items, plan: {} }),
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok) { $('gerrbox').textContent = j.error || 'Could not save.'; return; }
@@ -628,7 +666,6 @@
         return `
           <tr class="click grp" data-grp="${g.id}">
             <td><span class="caret">${open ? '▾' : '▸'}</span><span class="gname">${esc(g.name)}</span>
-              ${destToday(g) ? `<span class="today-dest">→ ${destHtml(destToday(g))} today</span>` : ''}
               ${isMgr ? `<button class="gedit" data-edit="${g.id}">edit</button>` : ''}
               <div class="desc" style="padding-left:11px">${codeList(g)}</div></td>
             <td class="num">${fmtInt(g.pallets.length)}${g.red ? ` <span class="redcount">${fmtInt(g.red)}🔴</span>` : ''}</td>
@@ -639,14 +676,6 @@
             <td class="num">${wStr(asArr(g.weight))}</td>
           </tr>` + (!open ? '' : `
           <tr class="lsub" data-grpsub="${g.id}"><td colspan="7">
-            ${(() => {
-              // The whole standing week, so "when does this move?" is answerable
-              // on any day, not just the one you happen to be reading it on.
-              const wk = DAYS.filter(([k]) => g.plan[k]);
-              return wk.length ? `<div class="weekplan">Every week: ${wk.map(([k, label]) =>
-                `<span class="d">${label}</span> <b>${destHtml(g.plan[k])}</b>`).join(' · ')}</div>`
-                : `<div class="weekplan">No weekly plan set${isMgr ? ' — press <b>edit</b> to add one.' : '.'}</div>`;
-            })()}
             ${g.products.length ? `<table class="subtbl">
               <thead><tr><th>Item</th><th class="num">Pallets</th><th>Location</th><th>Oldest since</th>
                 <th>States</th><th class="num">Cases</th><th class="num">Weight</th></tr></thead>
@@ -767,16 +796,15 @@
       GROUPS = o.groups || [];
       DESCS = new Map((o.allProducts || []).map((p) => [p.item, p.description]));
       $('newGroup').classList.toggle('hidden', !(ME.role === 'editor' || ME.role === 'admin'));
-      renderPlan();
+      // Refresh the manager message, but never yank the textarea out from under a
+      // manager who's mid-edit when the 60s auto-refresh fires.
+      try { const m = await (await fetch('/api/message')).json(); if (!MSG_EDIT) MSG = m; } catch (_) { /* keep last */ }
+      if (!MSG_EDIT) renderMessage();
       INV = o.palletRows || [];
       renderInvSorts();
       renderInventory();
 
       LOCS = o.locations || [];
-      // Typeahead for the destination boxes. Only bins that HAVE stock are in
-      // the snapshot, so an empty bin won't be suggested — the field stays free
-      // text precisely so that's never a dead end.
-      $('loclist').innerHTML = LOCS.map((l) => `<option value="${esc(l.code)}">`).join('');
       renderZones();
       renderLocations();
     }
