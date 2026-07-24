@@ -179,6 +179,7 @@
   </header>
 
   <div class="wrap">
+    <div id="planStrip"></div>
 
     <div class="banner">This is <b>v1</b>, built from everything the snapshot already carries.
       Missing the number you actually need? Say so on the <a href="/requests.html">💬 Requests</a> page and it gets built.</div>
@@ -279,6 +280,22 @@
         out[k] = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
       });
       return out;
+    }
+
+    // Today's tasks — every group with a note for TODAY, pulled together so the
+    // floor reads "what moves where today" at a glance instead of opening each group.
+    function renderToday() {
+      const k = todayKey();
+      const dateStr = new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
+      const tasks = (GROUPS || []).filter((g) => g.plan && g.plan[k])
+        .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+      $('planStrip').innerHTML = `<div class="plan">
+        <h3>📋 Today · ${esc(dateStr)}</h3>
+        ${tasks.length
+          ? `<ul>${tasks.map((g) => `<li>${esc(g.name)}<span class="to">→</span>`
+            + `<span class="dest">${esc(g.plan[k])}</span></li>`).join('')}</ul>`
+          : `<div class="none">No tasks scheduled for today.</div>`}
+      </div>`;
     }
 
     function daysSince(dateStr) {
@@ -756,6 +773,7 @@
       GROUPS = o.groups || [];
       DESCS = new Map((o.allProducts || []).map((p) => [p.item, p.description]));
       $('newGroup').classList.toggle('hidden', !(ME.role === 'editor' || ME.role === 'admin'));
+      renderToday();
       INV = o.palletRows || [];
       renderInvSorts();
       renderInventory();

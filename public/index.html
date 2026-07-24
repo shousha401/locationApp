@@ -91,6 +91,17 @@
     .banner.warn { background:#3b2a0b; color:var(--warn); border:1px solid #5a4514; }
     .banner.err { background:#3b0f0f; color:var(--err); border:1px solid #5a1414; }
     .hidden { display:none; }
+    /* Today's tasks board — the manager's per-group day-notes for today. */
+    .today { margin-bottom:16px; }
+    .today-in { padding:14px 18px; border-radius:11px; background:var(--panel);
+      border:1px solid var(--line); border-left:3px solid var(--accent2); }
+    .today-in h3 { margin:0 0 10px; font-size:11px; text-transform:uppercase; letter-spacing:.07em; color:var(--muted); }
+    .today-in ul { margin:0; padding:0; list-style:none; display:flex; flex-direction:column; gap:8px; }
+    .today-in li { font-size:16px; display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; }
+    .today-in .tg { font-weight:700; }
+    .today-in .ta { color:var(--muted); }
+    .today-in .tn { color:var(--accent2); font-weight:600; }
+    .today-in .tnone { color:var(--muted); font-size:13px; }
 
     /* ── Pallet cards ─────────────────────────────────────────────────────── */
     .pallet { border:1px solid var(--line); border-radius:11px; margin:16px; overflow:hidden; background:var(--panel2); }
@@ -155,6 +166,7 @@
   </header>
 
   <div class="wrap">
+    <div id="todayBoard" class="today hidden"></div>
     <div class="search">
       <input id="loc" list="locs" placeholder="Type a GT location — e.g. GT.2.Z2.C03" autocomplete="off" spellcheck="false">
       <datalist id="locs"></datalist>
@@ -515,6 +527,28 @@
       location.href = '/login.html';
     });
 
+    // Today's tasks — the manager's per-group day-notes for TODAY, shown up top so
+    // whoever logs in sees what to move where before doing anything else.
+    async function renderTodayTasks() {
+      let groups = [];
+      try { groups = (await (await fetch('/api/groups')).json()).groups || []; }
+      catch (_) { return; }
+      const now = new Date();
+      const k = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'][now.getDay()];
+      const dateStr = now.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
+      const tasks = groups.filter((g) => g.plan && g.plan[k])
+        .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+      const board = $('todayBoard');
+      board.classList.remove('hidden');
+      board.innerHTML = `<div class="today-in">
+        <h3>📋 Today · ${esc(dateStr)}</h3>
+        ${tasks.length
+          ? `<ul>${tasks.map((g) => `<li><span class="tg">${esc(g.name)}</span>`
+            + `<span class="ta">→</span><span class="tn">${esc(g.plan[k])}</span></li>`).join('')}</ul>`
+          : `<div class="tnone">No tasks scheduled for today.</div>`}
+      </div>`;
+    }
+
     async function init() {
       try {
         ME = await (await fetch('/api/session')).json();
@@ -522,6 +556,7 @@
         if (ME.role === 'admin') $('usersLink').classList.remove('hidden');
       } catch (_) { location.href = '/login.html'; return; }
 
+      renderTodayTasks();
       await refreshStatus();
       updateSuggestions('');
 
@@ -533,6 +568,7 @@
       // never while the editor has unsaved note edits).
       setInterval(refreshStatus, 15000);
       setInterval(() => { if (CURRENT && !DIRTY) loadLocation(CURRENT, true); }, 30000);
+      setInterval(renderTodayTasks, 120000);
     }
     init();
   </script>
