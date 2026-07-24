@@ -312,7 +312,8 @@ function overview(groupDefs) {
   // Manager groups: index item code -> the groups that contain it, so the main
   // row loop below can accumulate group totals in the same single pass.
   const gAgg = (groupDefs || []).map((g) => ({
-    id: g.id, name: g.name, items: g.items, updatedBy: g.updatedBy, updatedAt: g.updatedAt,
+    id: g.id, name: g.name, items: g.items, plan: g.plan || {},
+    updatedBy: g.updatedBy, updatedAt: g.updatedAt,
     units: 0, pallets: new Set(), redPallets: new Set(), cases: new Map(), weight: new Map(),
     perItem: new Map(), // item -> { units, pallets:Set, cases:Map, weight:Map, red:Set }
   }));
@@ -436,7 +437,8 @@ function overview(groupDefs) {
   const groupSummaries = gAgg
     .sort((a, b) => a.name.localeCompare(b.name))
     .map((g) => ({
-      id: g.id, name: g.name, items: g.items, updatedBy: g.updatedBy, updatedAt: g.updatedAt,
+      id: g.id, name: g.name, items: g.items, plan: g.plan,
+      updatedBy: g.updatedBy, updatedAt: g.updatedAt,
       presentItems: g.perItem.size, units: g.units, pallets: g.pallets.size,
       redPallets: g.redPallets.size, cases: wArr(g.cases), weight: wArr(g.weight),
       perItem: [...g.perItem.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1)).map(([item, gi]) => ({

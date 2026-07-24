@@ -14,8 +14,11 @@ Three pages, all behind the same login:
 - **📊 Dashboard** (`/dashboard.html`) — whole-warehouse aggregates from the same
   snapshot: totals, the frozen→temp state mix, oldest pallets (tempering clock:
   TEMP 6+ days shows red), biggest products, **manager-named product groups**
-  (editors pick items, name the set, and watch it as one line — with a red count),
-  and a clickable **all-locations** table with one-tap zone buttons.
+  (editors pick items, name the set, and watch it as one line — with a red count;
+  a grouped product reads under its group and is no longer listed on its own),
+  each group's **standing weekly plan** (which day it moves and where to — set by
+  editors, read by everyone, so the floor doesn't wait on a phone call), and a
+  clickable **all-locations** table with one-tap zone buttons.
 - **💬 Requests** (`/requests.html`) — the app's build queue. Users write what they
   want the app to show; the build side reads the thread and ships it. Seeded with
   interview questions on first run.
@@ -34,7 +37,11 @@ slightly-stale, never blank.
 - `backend/inventory.js` — the snapshot: pull → index by location; also the dashboard's `overview()` aggregates.
 - `backend/notes.js` — the app's own notes/flags layer (never writes to Swarmbox).
 - `backend/requests.js` — the build-queue thread (`data/requests.json`).
-- `backend/groups.js` — manager-named product groups (`data/product-groups.json`).
+- `backend/groups.js` — manager-named product groups and their weekly move plan
+  (`data/product-groups.json`). The plan repeats every week on purpose: a dated
+  schedule goes blank the moment nobody re-enters it, which is the exact failure
+  it exists to remove. Destinations are free text — sometimes a bin, sometimes
+  what the floor calls a place ("Line 3").
 - `backend/users.js` + `backend/auth.js` — per-user login with `viewer`/`editor`/`admin` roles,
   plus a narrow `X-Api-Key` lane scoped to `/api/requests*` only.
 - `public/` — the login screen, the feed, the dashboard, and the requests thread.

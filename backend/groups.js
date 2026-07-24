@@ -3,6 +3,12 @@
 // codes; the dashboard aggregates the snapshot across each group so managers
 // can watch a family of products as one line instead of fifteen.
 //
+// A group also carries a WEEKLY PLAN: which day it moves and where to. That is
+// the standing instruction the floor reads off the dashboard instead of waiting
+// for a manager to phone it in — so it repeats every week by design. A dated
+// schedule would go blank the moment nobody re-entered it, which is exactly the
+// failure this is meant to remove.
+//
 // App-owned, like notes: stored on disk (data/product-groups.json, gitignored),
 // never touches Swarmbox. Editors and admins manage them; everyone sees them.
 
@@ -12,8 +18,10 @@ const path = require('path');
 const FILE = path.join(__dirname, '..', 'data', 'product-groups.json');
 const MAX_NAME = 60;
 const MAX_ITEMS = 300;
+const MAX_DEST = 60;
+const DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
 
-let groups = []; // [{ id, name, items:[codes], updatedBy, updatedAt }]
+let groups = []; // [{ id, name, items:[codes], plan:{day:dest}, updatedBy, updatedAt }]
 
 function load() {
   let raw;
@@ -49,19 +57,34 @@ const cleanName = (s) => String(s || '').trim().slice(0, MAX_NAME);
 const cleanItems = (arr) => [...new Set((Array.isArray(arr) ? arr : [])
   .map((x) => String(x || '').trim()).filter(Boolean))].slice(0, MAX_ITEMS);
 
+// The weekly plan: { mon:'GT.2.Z1', wed:'Line 3' }. Destinations are free text
+// on purpose — sometimes a bin, sometimes what the floor calls a place, and the
+// app has no standing to reject the second. Days with nothing scheduled are
+// dropped rather than stored blank, so "has a plan" is just a key check.
+function cleanPlan(obj) {
+  const out = {};
+  if (!obj || typeof obj !== 'object') return out;
+  for (const d of DAYS) {
+    const v = String(obj[d] == null ? '' : obj[d]).trim().slice(0, MAX_DEST);
+    if (v) out[d] = v;
+  }
+  return out;
+}
+
 const list = () => groups.slice();
 const get = (id) => groups.find((g) => g.id === Number(id)) || null;
 const nameTaken = (name, exceptId) => groups.some(
   (g) => g.id !== exceptId && g.name.toLowerCase() === name.toLowerCase());
 
-function create(name, items, who) {
+function create(name, items, plan, who) {
   name = cleanName(name);
   items = cleanItems(items);
   if (!name) return { error: 'Group needs a name' };
   if (!items.length) return { error: 'Pick at least one product' };
   if (nameTaken(name, null)) return { error: `A group called '${name}' already exists` };
   const id = groups.reduce((m, g) => Math.max(m, g.id), 0) + 1;
-  const rec = { id, name, items, updatedBy: who || null, updatedAt: new Date().toISOString() };
+  const rec = { id, name, items, plan: cleanPlan(plan),
+    updatedBy: who || null, updatedAt: new Date().toISOString() };
   groups.push(rec);
   persist();
   return rec;
@@ -81,6 +104,9 @@ function update(id, patch, who) {
     if (!items.length) return { error: 'Pick at least one product' };
     g.items = items;
   }
+  // An all-blank plan is a legitimate edit — a manager clearing the week — so
+  // this replaces rather than merges. Omitting `plan` entirely leaves it alone.
+  if (patch.plan !== undefined) g.plan = cleanPlan(patch.plan);
   g.updatedBy = who || null;
   g.updatedAt = new Date().toISOString();
   persist();
@@ -95,4 +121,4 @@ function remove(id) {
   return g;
 }
 
-module.exports = { list, get, create, update, remove };
+module.exports = { list, get, create, update, remove, DAYS };

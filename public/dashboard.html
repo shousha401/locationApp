@@ -105,6 +105,26 @@
     .gedit:hover { border-color:var(--accent); color:var(--accent); }
     .redcount { color:var(--err); font-weight:700; }
 
+    /* Today's moves. This is the one thing on the page someone should be able
+       to read from across the room without touching anything, so it sits above
+       the tiles and is set larger than everything around it. */
+    .plan { margin:0 0 16px; padding:14px 18px; border-radius:11px; background:var(--panel);
+      border:1px solid var(--line); border-left:3px solid var(--accent2); }
+    .plan h3 { margin:0 0 9px; font-size:11px; text-transform:uppercase; letter-spacing:.07em; color:var(--muted); }
+    .plan ul { margin:0; padding:0; list-style:none; display:flex; flex-wrap:wrap; gap:9px 26px; }
+    .plan li { font-size:17px; }
+    .plan .to { color:var(--muted); margin:0 8px; }
+    .plan .dest { color:var(--accent2); font-weight:700; }
+    .plan .dest a { color:var(--accent2); }
+    .plan .none { color:var(--muted); font-size:13px; }
+    /* The same instruction, repeated on the group's own line — someone reading
+       All inventory shouldn't have to scroll back up to learn where it goes. */
+    .today-dest { color:var(--accent2); font-weight:700; margin-left:9px; white-space:nowrap; }
+    .today-dest a { color:var(--accent2); }
+    .weekplan { padding:2px 10px 8px; font-size:12px; color:var(--muted); }
+    .weekplan b { color:var(--text); font-weight:600; }
+    .weekplan .d { color:var(--accent2); }
+
     /* group editor overlay (dark, unlike the white barcode sheet on the feed) */
     .modal { position:fixed; inset:0; background:rgba(2,6,23,.85); display:none; z-index:50;
       align-items:center; justify-content:center; padding:20px; }
@@ -130,6 +150,20 @@
     .gcancel { background:none; border:1px solid var(--line) !important; color:var(--muted); }
     .gdelete { background:none; border:1px solid var(--err) !important; color:var(--err); }
     .gerr { color:var(--err); font-size:12px; margin-top:8px; min-height:16px; }
+    .gsheet h4 { margin:16px 0 8px; font-size:11px; color:var(--muted);
+      text-transform:uppercase; letter-spacing:.06em; }
+    .gsheet h4 span { text-transform:none; letter-spacing:0; }
+    .days { border:1px solid var(--line); border-radius:9px; overflow:hidden; }
+    .dayrow { display:flex; align-items:center; gap:11px; padding:5px 11px;
+      border-bottom:1px solid rgba(51,65,85,.45); }
+    .dayrow:last-child { border-bottom:0; }
+    .dayrow > span { width:38px; font-size:12px; color:var(--muted);
+      text-transform:uppercase; letter-spacing:.05em; }
+    /* Beats .gsheet input[type=text] on order, same specificity — these sit in
+       a row, so they must not take the full width or the 12px bottom margin. */
+    .gsheet .dayrow input[type=text] { flex:1; width:auto; margin:0; padding:7px 10px; font-size:13px; }
+    .dayrow.today { background:rgba(34,211,238,.07); }
+    .dayrow.today > span { color:var(--accent2); font-weight:700; }
   </style>
 </head>
 <body>
@@ -144,6 +178,8 @@
   </header>
 
   <div class="wrap">
+    <div id="planStrip"></div>
+
     <div class="banner">This is <b>v1</b>, built from everything the snapshot already carries.
       Missing the number you actually need? Say so on the <a href="/requests.html">💬 Requests</a> page and it gets built.</div>
 
@@ -178,6 +214,9 @@
     <h3 id="gtitle">New group</h3>
     <input type="text" id="gname" placeholder="Group name — what the floor calls these" maxlength="60">
     <div class="picklist" id="gpick"></div>
+    <h4>Where does it go? <span>— a bin, or whatever the floor calls the place. Leave a day blank if it doesn't move.</span></h4>
+    <div class="days" id="gdays"></div>
+    <datalist id="loclist"></datalist>
     <div class="gerr" id="gerrbox"></div>
     <div class="gactions">
       <button class="gdelete hidden" id="gdel">Delete group</button>
@@ -212,6 +251,43 @@
         + (g.missing.length ? ` · ${fmtInt(g.missing.length)} ${gonePhrase(g)}` : '');
     }
     const chips = (states) => (states || []).map((s) => `<span class="chip ${esc(s)}">${esc(s)}</span>`).join('');
+
+    // ── The weekly plan ───────────────────────────────────────────────────────
+    // A group's standing instruction: which day it moves, and where to. Read on
+    // the floor, so "today" is the VIEWER's day — the person standing in front
+    // of the screen — not the server's. getDay() is 0=Sunday.
+    const DAYS = [['mon', 'Mon'], ['tue', 'Tue'], ['wed', 'Wed'], ['thu', 'Thu'],
+      ['fri', 'Fri'], ['sat', 'Sat'], ['sun', 'Sun']];
+    const DAY_FULL = { mon: 'Monday', tue: 'Tuesday', wed: 'Wednesday', thu: 'Thursday',
+      fri: 'Friday', sat: 'Saturday', sun: 'Sunday' };
+    const todayKey = () => ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'][new Date().getDay()];
+    // A destination that looks like a bin links through to the feed; anything
+    // else ("Line 3", "Grind room") is a place the app knows nothing about and
+    // is left as plain text rather than a link that would 404 on arrival.
+    const LOC_CODE = /^[A-Z0-9]+(?:\.[A-Z0-9]+)+$/;
+    const destHtml = (d) => (LOC_CODE.test(String(d).toUpperCase())
+      ? `<a href="/?loc=${encodeURIComponent(d)}">${esc(d)}</a>` : esc(d));
+    const planOf = (g) => (g && g.plan) || {};
+    const destToday = (g) => planOf(g)[todayKey()] || '';
+
+    // Today's moves, straight off the group list — deliberately NOT off the
+    // filtered inventory rows: what someone typed in the filter box, and whether
+    // a group happens to have stock right now, must never change the day's
+    // instructions.
+    function renderPlan() {
+      const k = todayKey();
+      const moves = (GROUPS || []).filter((g) => destToday(g))
+        .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+      const isMgr = ME.role === 'editor' || ME.role === 'admin';
+      $('planStrip').innerHTML = `<div class="plan">
+        <h3>📋 Today · ${DAY_FULL[k]}</h3>
+        ${moves.length
+          ? `<ul>${moves.map((g) => `<li>${esc(g.name)}<span class="to">→</span>`
+            + `<span class="dest">${destHtml(destToday(g))}</span></li>`).join('')}</ul>`
+          : `<div class="none">Nothing is scheduled to move today.`
+            + `${isMgr ? ' Open a group below and press <b>edit</b> to set its week.' : ''}</div>`}
+      </div>`;
+    }
     function daysSince(dateStr) {
       if (!dateStr) return null;
       const d = new Date(String(dateStr).length <= 10 ? dateStr + 'T00:00:00' : dateStr);
@@ -260,6 +336,13 @@
         + extras.map((c) => `
         <label class="pick"><input type="checkbox" value="${esc(c)}" checked>
           <span class="mono">${esc(c)}</span><span class="desc">not in GT right now</span></label>`).join('');
+      // The standing week. Today's row is highlighted so a manager editing the
+      // plan can see at a glance what the floor is being told right now.
+      const plan = planOf(g), tk = todayKey();
+      $('gdays').innerHTML = DAYS.map(([k, label]) => `
+        <label class="dayrow ${k === tk ? 'today' : ''}"><span>${label}</span>
+          <input type="text" data-day="${k}" list="loclist" maxlength="60"
+            value="${esc(plan[k] || '')}" placeholder="doesn't move"></label>`).join('');
       $('gmodal').classList.add('on');
     }
     const closeEditor = () => $('gmodal').classList.remove('on');
@@ -276,10 +359,14 @@
     $('gsave').addEventListener('click', async () => {
       const name = $('gname').value.trim();
       const items = [...$('gpick').querySelectorAll('input:checked')].map((i) => i.value);
+      // Blanks are sent through as blanks: the server drops them, which is how a
+      // manager clears a day they no longer want the floor moving stock on.
+      const plan = {};
+      for (const i of $('gdays').querySelectorAll('input[data-day]')) plan[i.dataset.day] = i.value.trim();
       const url = EDIT_ID != null ? '/api/groups/' + EDIT_ID : '/api/groups';
       const res = await fetch(url, {
         method: EDIT_ID != null ? 'PUT' : 'POST',
-        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, items }),
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, items, plan }),
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok) { $('gerrbox').textContent = j.error || 'Could not save.'; return; }
@@ -454,7 +541,7 @@
         // hiding stock that exists, and saying otherwise would be a lie.
         const here = new Set(products.map((p) => p.item));
         const missing = g.items.filter((c) => !here.has(c)).sort(cmpStr);
-        return Object.assign({ id: g.id, name: g.name, total: g.items.length,
+        return Object.assign({ id: g.id, name: g.name, plan: planOf(g), total: g.items.length,
           products, missing, filtered: filtering }, foldPallets(mine));
       }).filter((g) => !filtering || g.products.length)
         .sort((a, b) => cmpStr(a.name, b.name));
@@ -479,11 +566,22 @@
           || p.locations.some((l) => squash(l).includes(q))
           || String(p.description || '').toUpperCase().includes(raw))
         : INV;
-      const groups = groupByItem(rows);
-      const sorted = groups.sort((INV_SORTS.find((s) => s[0] === INV_SORT) || INV_SORTS[0])[2]);
+      const byItem = groupByItem(rows);
+
+      // A group OWNS the products a manager put in it: once an item is grouped
+      // it reads under that group's name and nowhere else, so the flat list
+      // below is strictly what no group has claimed. Claimed is taken from the
+      // groups actually rendered, so a filter can never drop a product out of
+      // both lists and make it look like it isn't in GT.
+      const named = namedGroups(rows, q !== '');
+      const claimed = new Set(named.flatMap((g) => g.products.map((p) => p.item)));
+      const loose = byItem.filter((g) => !claimed.has(g.item));
+      const sorted = loose.sort((INV_SORTS.find((s) => s[0] === INV_SORT) || INV_SORTS[0])[2]);
 
       $('invCount').textContent =
-        `${fmtInt(groups.length)} products · ${fmtInt(rows.length)} of ${fmtInt(INV.length)} pallet lines`;
+        `${fmtInt(byItem.length)} products`
+        + (claimed.size ? ` · ${fmtInt(claimed.size)} in ${fmtInt(named.length)} group${named.length === 1 ? '' : 's'}` : '')
+        + ` · ${fmtInt(rows.length)} of ${fmtInt(INV.length)} pallet lines`;
 
       // Totals for whatever is filtered — the same read-off-the-zone trick the
       // locations card does.
@@ -494,7 +592,7 @@
         for (const w of p.weight || []) weight.set(w.uom, (weight.get(w.uom) || 0) + w.qty);
       }
       $('invSum').innerHTML = rows.length
-        ? `Selection: <b>${fmtInt(groups.length)}</b> products · <b>${fmtInt(rows.length)}</b> pallets · `
+        ? `Selection: <b>${fmtInt(byItem.length)}</b> products · <b>${fmtInt(rows.length)}</b> pallets · `
           + `<b>${wStr(asArr(cases))}</b> · <b>${wStr(asArr(weight))}</b>`
           + (red ? ` · <span class="redcount">${fmtInt(red)} 🔴 over 6 days</span>` : '')
         : 'Nothing matches that filter.';
@@ -519,15 +617,18 @@
 
       // A group is the same fold as a product, so it prints the same seven
       // columns — a manager reads "Grassfed" exactly the way they read an item.
-      const named = namedGroups(rows, q !== '');
       const isMgr = ME.role === 'editor' || ME.role === 'admin';
       const grpRows = named.map((g) => {
-        const open = GRP_OPEN.has(g.id);
+        // Filtering forces groups open for the same reason it forces products
+        // open — and now more so: a grouped item has no row of its own to fall
+        // back to, so a collapsed group would swallow the very hit typed for.
+        const open = forceOpen || GRP_OPEN.has(g.id);
         const sd = daysSince(g.since);
         const rd = daysSince(g.date);
         return `
           <tr class="click grp" data-grp="${g.id}">
             <td><span class="caret">${open ? '▾' : '▸'}</span><span class="gname">${esc(g.name)}</span>
+              ${destToday(g) ? `<span class="today-dest">→ ${destHtml(destToday(g))} today</span>` : ''}
               ${isMgr ? `<button class="gedit" data-edit="${g.id}">edit</button>` : ''}
               <div class="desc" style="padding-left:11px">${codeList(g)}</div></td>
             <td class="num">${fmtInt(g.pallets.length)}${g.red ? ` <span class="redcount">${fmtInt(g.red)}🔴</span>` : ''}</td>
@@ -538,6 +639,14 @@
             <td class="num">${wStr(asArr(g.weight))}</td>
           </tr>` + (!open ? '' : `
           <tr class="lsub" data-grpsub="${g.id}"><td colspan="7">
+            ${(() => {
+              // The whole standing week, so "when does this move?" is answerable
+              // on any day, not just the one you happen to be reading it on.
+              const wk = DAYS.filter(([k]) => g.plan[k]);
+              return wk.length ? `<div class="weekplan">Every week: ${wk.map(([k, label]) =>
+                `<span class="d">${label}</span> <b>${destHtml(g.plan[k])}</b>`).join(' · ')}</div>`
+                : `<div class="weekplan">No weekly plan set${isMgr ? ' — press <b>edit</b> to add one.' : '.'}</div>`;
+            })()}
             ${g.products.length ? `<table class="subtbl">
               <thead><tr><th>Item</th><th class="num">Pallets</th><th>Location</th><th>Oldest since</th>
                 <th>States</th><th class="num">Cases</th><th class="num">Weight</th></tr></thead>
@@ -561,7 +670,8 @@
         <thead><tr><th>Item</th><th class="num">Pallets</th><th>Location</th><th>Oldest since</th>
           <th>States · oldest received</th><th class="num">Cases</th><th class="num">Weight</th></tr></thead>
         <tbody>${grpRows}${named.length ? `
-        <tr class="sechead"><td colspan="7">Every product</td></tr>` : ''}${page.map((g) => {
+        <tr class="sechead"><td colspan="7">${sorted.length ? 'Everything else'
+          : 'Every product on hand is in a group above'}</td></tr>` : ''}${page.map((g) => {
           const open = forceOpen || INV_OPEN.has(g.item);
           const sd = daysSince(g.since);
           const rd = daysSince(g.date);
@@ -657,11 +767,16 @@
       GROUPS = o.groups || [];
       DESCS = new Map((o.allProducts || []).map((p) => [p.item, p.description]));
       $('newGroup').classList.toggle('hidden', !(ME.role === 'editor' || ME.role === 'admin'));
+      renderPlan();
       INV = o.palletRows || [];
       renderInvSorts();
       renderInventory();
 
       LOCS = o.locations || [];
+      // Typeahead for the destination boxes. Only bins that HAVE stock are in
+      // the snapshot, so an empty bin won't be suggested — the field stays free
+      // text precisely so that's never a dead end.
+      $('loclist').innerHTML = LOCS.map((l) => `<option value="${esc(l.code)}">`).join('');
       renderZones();
       renderLocations();
     }
