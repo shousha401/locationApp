@@ -11,7 +11,6 @@ const inventory = require('./backend/inventory');
 const notes = require('./backend/notes');
 const requests = require('./backend/requests');
 const groups = require('./backend/groups');
-const message = require('./backend/message');
 
 const app = express();
 app.use(express.json({ limit: '256kb' }));
@@ -50,16 +49,6 @@ app.get('/api/location/:code', (req, res) => {
 app.get('/api/notes/:code', (req, res) => res.json(notes.get(req.params.code)));
 app.put('/api/notes/:code', auth.requireEditor, (req, res) => {
   res.json(notes.set(req.params.code, req.body || {}, req.user.username));
-});
-
-// ── Message from the manager ─────────────────────────────────────────────────
-// One global note on the dashboard. Everyone reads it; editors/admins write it.
-// (Replaced the per-group weekly move schedule.)
-app.get('/api/message', (_req, res) => res.json(message.get()));
-app.put('/api/message', auth.requireEditor, (req, res) => {
-  const rec = message.set((req.body && req.body.text) || '', req.user.username);
-  console.log(`[Message] ${req.user.username} updated the manager message (${rec.text.length} chars)`);
-  res.json(rec);
 });
 
 // Whole-snapshot aggregates for the dashboard. Served from RAM — costs Swarmbox nothing.

@@ -12,13 +12,11 @@ Three pages, all behind the same login:
 - **📍 Feed** (`/`) — one location's contents, grouped by pallet, scannable barcodes.
   Deep-linkable: `/?loc=GT.2.Z2.C03` opens straight on that bin.
 - **📊 Dashboard** (`/dashboard.html`) — whole-warehouse aggregates from the same
-  snapshot: a **message from the manager** at the top (one note editors/admins write
-  and everyone reads, dated to the day), totals, the frozen→temp state mix, oldest
-  pallets (tempering clock: TEMP 6+ days shows red), biggest products,
-  **manager-named product groups** (editors pick items, name the set, and watch it
-  as one line — with a red count; a grouped product reads under its group and is no
-  longer listed on its own), and a clickable **all-locations** table with one-tap
-  zone buttons.
+  snapshot: totals, the frozen→temp state mix, oldest pallets (tempering clock:
+  TEMP 6+ days shows red), biggest products, **manager-named product groups**
+  (editors pick items, name the set, and watch it as one line — with a red count;
+  a grouped product reads under its group and is no longer listed on its own), and
+  a clickable **all-locations** table with one-tap zone buttons.
 - **💬 Requests** (`/requests.html`) — the app's build queue. Users write what they
   want the app to show; the build side reads the thread and ships it. Seeded with
   interview questions on first run.
@@ -37,11 +35,9 @@ slightly-stale, never blank.
 - `backend/inventory.js` — the snapshot: pull → index by location; also the dashboard's `overview()` aggregates.
 - `backend/notes.js` — the app's own notes/flags layer (never writes to Swarmbox).
 - `backend/requests.js` — the build-queue thread (`data/requests.json`).
-- `backend/message.js` — the single "message from the manager" shown on the dashboard
-  (`data/manager-message.json`); editors/admins write, everyone reads.
 - `backend/groups.js` — manager-named product groups (`data/product-groups.json`).
-  (The per-group weekly move plan it once carried was retired in favour of the single
-  manager message; the field remains in the store but is no longer used by the UI.)
+  (Once carried a per-group weekly move plan; that was retired, so the `plan` field
+  remains in the store but is no longer written or read by the UI.)
 - `backend/users.js` + `backend/auth.js` — per-user login with `viewer`/`editor`/`admin` roles,
   plus a narrow `X-Api-Key` lane scoped to `/api/requests*` only.
 - `public/` — the login screen, the feed, the dashboard, and the requests thread.

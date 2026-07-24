@@ -117,22 +117,6 @@
     .plan .dest { color:var(--accent2); font-weight:700; }
     .plan .dest a { color:var(--accent2); }
     .plan .none { color:var(--muted); font-size:13px; }
-    /* Message from the manager — reuses the plan strip's frame. */
-    .plan.msg h3 { display:flex; align-items:center; gap:10px; }
-    .plan.msg .msgdate { text-transform:none; letter-spacing:0; color:var(--muted); font-weight:400; }
-    .plan.msg .mbtn.edit { margin-left:auto; }
-    .msgbody { font-size:16px; line-height:1.55; white-space:pre-wrap; color:var(--text); }
-    .msgby { margin-top:9px; font-size:11px; color:var(--muted); }
-    .plan.msg textarea { width:100%; min-height:90px; margin:2px 0 0; padding:11px 12px; font:inherit;
-      font-size:15px; border-radius:9px; border:1px solid var(--line); background:var(--panel2);
-      color:var(--text); resize:vertical; }
-    .plan.msg textarea:focus { outline:none; border-color:var(--accent2); }
-    .msgact { display:flex; gap:8px; justify-content:flex-end; margin-top:10px; }
-    .mbtn { padding:7px 15px; border-radius:8px; cursor:pointer; font-size:13px; font-weight:700;
-      border:1px solid var(--line); background:var(--panel2); color:var(--text); }
-    .mbtn.save { background:var(--accent2); color:#04222f; border-color:var(--accent2); }
-    .mbtn.edit { font-size:12px; font-weight:600; }
-    .mbtn.cancel { background:none; color:var(--muted); }
     /* The same instruction, repeated on the group's own line — someone reading
        All inventory shouldn't have to scroll back up to learn where it goes. */
     .today-dest { color:var(--accent2); font-weight:700; margin-left:9px; white-space:nowrap; }
@@ -194,7 +178,6 @@
   </header>
 
   <div class="wrap">
-    <div id="planStrip"></div>
 
     <div class="banner">This is <b>v1</b>, built from everything the snapshot already carries.
       Missing the number you actually need? Say so on the <a href="/requests.html">💬 Requests</a> page and it gets built.</div>
@@ -283,60 +266,6 @@
     const planOf = (g) => (g && g.plan) || {};
     const destToday = (g) => planOf(g)[todayKey()] || '';
 
-    // ── Message from the manager ────────────────────────────────────────────────
-    // One global note the manager leaves for the whole floor. Editors and admins
-    // write it; viewers read it. Replaced the per-group weekly move schedule.
-    let MSG = { text: '', updatedBy: null, updatedAt: null };
-    let MSG_EDIT = false;
-    const todayLong = () => new Date().toLocaleDateString(undefined,
-      { weekday: 'long', month: 'short', day: 'numeric', year: 'numeric' });
-
-    function renderMessage() {
-      const isMgr = ME.role === 'editor' || ME.role === 'admin';
-      const text = (MSG.text || '').trim();
-      const stamp = MSG.updatedAt
-        ? `<div class="msgby">— ${esc(MSG.updatedBy || '?')}, ${new Date(MSG.updatedAt).toLocaleString()}</div>` : '';
-
-      if (MSG_EDIT && isMgr) {
-        $('planStrip').innerHTML = `<div class="plan msg">
-          <h3>📋 Message from the manager <span class="msgdate">${esc(todayLong())}</span></h3>
-          <textarea id="msgText" maxlength="2000" placeholder="Leave a note for the floor…">${esc(MSG.text || '')}</textarea>
-          <div class="msgact">
-            <button class="mbtn cancel" id="msgCancel">Cancel</button>
-            <button class="mbtn save" id="msgSave">Save message</button>
-          </div>`;
-        $('msgText').focus();
-        $('msgCancel').addEventListener('click', () => { MSG_EDIT = false; renderMessage(); });
-        $('msgSave').addEventListener('click', saveMessage);
-        return;
-      }
-
-      $('planStrip').innerHTML = `<div class="plan msg">
-        <h3>📋 Message from the manager <span class="msgdate">${esc(todayLong())}</span>
-          ${isMgr ? `<button class="mbtn edit" id="msgEdit">${text ? '✎ Edit' : '＋ Add message'}</button>` : ''}</h3>
-        ${text
-          ? `<div class="msgbody">${esc(text).replace(/\n/g, '<br>')}</div>${stamp}`
-          : `<div class="none">${isMgr ? 'No message yet — press “Add message” to leave one for the floor.'
-              : 'No message from the manager right now.'}</div>`}`;
-      if (isMgr) $('msgEdit').addEventListener('click', () => { MSG_EDIT = true; renderMessage(); });
-    }
-
-    async function saveMessage() {
-      const btn = $('msgSave'); btn.disabled = true; btn.textContent = 'Saving…';
-      try {
-        const res = await fetch('/api/message', {
-          method: 'PUT', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: $('msgText').value }),
-        });
-        if (!res.ok) throw new Error();
-        MSG = await res.json();
-        MSG_EDIT = false;
-        renderMessage();
-      } catch (_) {
-        btn.disabled = false; btn.textContent = 'Save message';
-        alert('Could not save the message — are you still signed in as a manager?');
-      }
-    }
     function daysSince(dateStr) {
       if (!dateStr) return null;
       const d = new Date(String(dateStr).length <= 10 ? dateStr + 'T00:00:00' : dateStr);
@@ -796,10 +725,6 @@
       GROUPS = o.groups || [];
       DESCS = new Map((o.allProducts || []).map((p) => [p.item, p.description]));
       $('newGroup').classList.toggle('hidden', !(ME.role === 'editor' || ME.role === 'admin'));
-      // Refresh the manager message, but never yank the textarea out from under a
-      // manager who's mid-edit when the 60s auto-refresh fires.
-      try { const m = await (await fetch('/api/message')).json(); if (!MSG_EDIT) MSG = m; } catch (_) { /* keep last */ }
-      if (!MSG_EDIT) renderMessage();
       INV = o.palletRows || [];
       renderInvSorts();
       renderInventory();
