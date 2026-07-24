@@ -64,7 +64,7 @@ const groupResult = (res, r, who, verb) => {
   if (r.error) return res.status(400).json({ error: r.error });
   const days = Object.keys(r.plan || {}).length;
   console.log(`[Groups] ${who} ${verb} '${r.name}' (${r.items.length} items`
-    + `${days ? `, moves ${days} day${days === 1 ? '' : 's'}/week` : ''})`);
+    + `${days ? `, notes on ${days} day${days === 1 ? '' : 's'}` : ''})`);
   res.json(r);
 };
 app.get('/api/groups', (_req, res) => res.json({ groups: groups.list(), days: groups.DAYS }));

@@ -157,8 +157,9 @@
     .dayrow { display:flex; align-items:center; gap:11px; padding:5px 11px;
       border-bottom:1px solid rgba(51,65,85,.45); }
     .dayrow:last-child { border-bottom:0; }
-    .dayrow > span { width:38px; font-size:12px; color:var(--muted);
+    .dayrow > span { width:96px; flex-shrink:0; font-size:12px; color:var(--muted);
       text-transform:uppercase; letter-spacing:.05em; }
+    .dayrow > span small { font-size:10px; letter-spacing:0; text-transform:none; opacity:.7; margin-left:4px; }
     /* Beats .gsheet input[type=text] on order, same specificity — these sit in
        a row, so they must not take the full width or the 12px bottom margin. */
     .gsheet .dayrow input[type=text] { flex:1; width:auto; margin:0; padding:7px 10px; font-size:13px; }
@@ -213,6 +214,8 @@
     <h3 id="gtitle">New group</h3>
     <input type="text" id="gname" placeholder="Group name — what the floor calls these" maxlength="60">
     <div class="picklist" id="gpick"></div>
+    <h4>Daily note <span>— a short note for each day this week. Leave a day blank if there's nothing.</span></h4>
+    <div class="days" id="gdays"></div>
     <div class="gerr" id="gerrbox"></div>
     <div class="gactions">
       <button class="gdelete hidden" id="gdel">Delete group</button>
@@ -265,6 +268,18 @@
       ? `<a href="/?loc=${encodeURIComponent(d)}">${esc(d)}</a>` : esc(d));
     const planOf = (g) => (g && g.plan) || {};
     const destToday = (g) => planOf(g)[todayKey()] || '';
+    // This week's dates (Monday-anchored) so each weekday row can show its date.
+    function weekDates() {
+      const now = new Date();
+      const monday = new Date(now);
+      monday.setDate(now.getDate() - ((now.getDay() + 6) % 7));
+      const out = {};
+      DAYS.forEach(([k], i) => {
+        const d = new Date(monday); d.setDate(monday.getDate() + i);
+        out[k] = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+      });
+      return out;
+    }
 
     function daysSince(dateStr) {
       if (!dateStr) return null;
@@ -314,6 +329,15 @@
         + extras.map((c) => `
         <label class="pick"><input type="checkbox" value="${esc(c)}" checked>
           <span class="mono">${esc(c)}</span><span class="desc">not in GT right now</span></label>`).join('');
+      // Weekday rows: a free-text NOTE per day (not a bin), with this week's date
+      // beside each label. Stored in the group's `plan`.
+      const plan = planOf(g);
+      const dates = weekDates();
+      const tk = todayKey();
+      $('gdays').innerHTML = DAYS.map(([k, label]) => `
+        <label class="dayrow ${k === tk ? 'today' : ''}"><span>${label} <small>${esc(dates[k])}</small></span>
+          <input type="text" data-day="${k}" maxlength="200"
+            value="${esc(plan[k] || '')}" placeholder="note (optional)"></label>`).join('');
       $('gmodal').classList.add('on');
     }
     const closeEditor = () => $('gmodal').classList.remove('on');
@@ -330,10 +354,12 @@
     $('gsave').addEventListener('click', async () => {
       const name = $('gname').value.trim();
       const items = [...$('gpick').querySelectorAll('input:checked')].map((i) => i.value);
+      const plan = {};
+      for (const i of $('gdays').querySelectorAll('input[data-day]')) plan[i.dataset.day] = i.value.trim();
       const url = EDIT_ID != null ? '/api/groups/' + EDIT_ID : '/api/groups';
       const res = await fetch(url, {
         method: EDIT_ID != null ? 'PUT' : 'POST',
-        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, items, plan: {} }),
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, items, plan }),
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok) { $('gerrbox').textContent = j.error || 'Could not save.'; return; }
@@ -605,6 +631,11 @@
             <td class="num">${wStr(asArr(g.weight))}</td>
           </tr>` + (!open ? '' : `
           <tr class="lsub" data-grpsub="${g.id}"><td colspan="7">
+            ${(() => {
+              const wk = DAYS.filter(([k]) => g.plan && g.plan[k]);
+              return wk.length ? `<div class="weekplan">${wk.map(([k, label]) =>
+                `<span class="d">${label}</span> ${esc(g.plan[k])}`).join('   ·   ')}</div>` : '';
+            })()}
             ${g.products.length ? `<table class="subtbl">
               <thead><tr><th>Item</th><th class="num">Pallets</th><th>Location</th><th>Oldest since</th>
                 <th>States</th><th class="num">Cases</th><th class="num">Weight</th></tr></thead>

@@ -18,7 +18,7 @@ const path = require('path');
 const FILE = path.join(__dirname, '..', 'data', 'product-groups.json');
 const MAX_NAME = 60;
 const MAX_ITEMS = 300;
-const MAX_DEST = 60;
+const MAX_NOTE = 200;
 const DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
 
 let groups = []; // [{ id, name, items:[codes], plan:{day:dest}, updatedBy, updatedAt }]
@@ -57,15 +57,15 @@ const cleanName = (s) => String(s || '').trim().slice(0, MAX_NAME);
 const cleanItems = (arr) => [...new Set((Array.isArray(arr) ? arr : [])
   .map((x) => String(x || '').trim()).filter(Boolean))].slice(0, MAX_ITEMS);
 
-// The weekly plan: { mon:'GT.2.Z1', wed:'Line 3' }. Destinations are free text
-// on purpose — sometimes a bin, sometimes what the floor calls a place, and the
-// app has no standing to reject the second. Days with nothing scheduled are
-// dropped rather than stored blank, so "has a plan" is just a key check.
+// The weekly plan is a free-text NOTE per day: { mon:'ship AM', wed:'recount' }.
+// (It used to be a move destination; managers asked for a plain note instead.)
+// Days with nothing are dropped rather than stored blank, so "has a note" is just
+// a key check.
 function cleanPlan(obj) {
   const out = {};
   if (!obj || typeof obj !== 'object') return out;
   for (const d of DAYS) {
-    const v = String(obj[d] == null ? '' : obj[d]).trim().slice(0, MAX_DEST);
+    const v = String(obj[d] == null ? '' : obj[d]).trim().slice(0, MAX_NOTE);
     if (v) out[d] = v;
   }
   return out;
