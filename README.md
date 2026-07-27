@@ -7,7 +7,8 @@ pallet count — refreshing on its own. Deliberately **no cost/value data**.
 `editor`s can attach **notes and status flags** to a location; `viewer`s see them
 read-only.
 
-Three pages, all behind the same login:
+Three pages, all behind the same login. The feed and the dashboard both open with
+the **Today board** (below), so signing in starts with what has to happen today:
 
 - **📍 Feed** (`/`) — one location's contents, grouped by pallet, scannable barcodes.
   Deep-linkable: `/?loc=GT.2.Z2.C03` opens straight on that bin.
@@ -15,7 +16,9 @@ Three pages, all behind the same login:
   snapshot: totals, the frozen→temp state mix, oldest pallets (tempering clock:
   TEMP 6+ days shows red), biggest products, **manager-named product groups**
   (editors pick items, name the set, and watch it as one line — with a red count;
-  a grouped product reads under its group and is no longer listed on its own), and
+  a grouped product reads under its group and is no longer listed on its own; a
+  group with nothing on hand folds away behind a counted "N groups with nothing on
+  hand · show" line, and editors get **✕** on any group row to remove it), and
   a clickable **all-locations** table with one-tap zone buttons.
 - **💬 Requests** (`/requests.html`) — the app's build queue. Users write what they
   want the app to show; the build side reads the thread and ships it. Seeded with
@@ -35,9 +38,13 @@ slightly-stale, never blank.
 - `backend/inventory.js` — the snapshot: pull → index by location; also the dashboard's `overview()` aggregates.
 - `backend/notes.js` — the app's own notes/flags layer (never writes to Swarmbox).
 - `backend/requests.js` — the build-queue thread (`data/requests.json`).
-- `backend/groups.js` — manager-named product groups (`data/product-groups.json`).
-  (Once carried a per-group weekly move plan; that was retired, so the `plan` field
-  remains in the store but is no longer written or read by the UI.)
+- `backend/groups.js` — manager-named product groups, each carrying a `plan`: a short
+  free-text note per weekday (`data/product-groups.json`). The week is a **standing**
+  instruction — it repeats until someone changes it.
+- `backend/today.js` — the Today board's own state (`data/today-board.json`): done
+  ticks and the manager's note for the day, both keyed by calendar date.
+- `public/today.js` — the Today board itself, shared by the feed and the dashboard so
+  the floor and the office read exactly the same thing.
 - `backend/users.js` + `backend/auth.js` — per-user login with `viewer`/`editor`/`admin` roles,
   plus a narrow `X-Api-Key` lane scoped to `/api/requests*` only.
 - `public/` — the login screen, the feed, the dashboard, and the requests thread.
@@ -64,8 +71,8 @@ Roles are ranked — `admin` ⊇ `editor` ⊇ `viewer`.
 
 | Role     | Can do                                                                   |
 |----------|--------------------------------------------------------------------------|
-| `viewer` | Search locations, see contents and notes/flags (read-only).              |
-| `editor` | Everything a viewer can, **plus** edit notes and flags.                  |
+| `viewer` | Search locations, see contents and notes/flags (read-only), and **check today's tasks off**. |
+| `editor` | Everything a viewer can, **plus** edit notes and flags, product groups, the week's tasks, and the day notes. |
 | `admin`  | Everything an editor can, **plus** manage users at **`/users.html`**.    |
 
 Admins get a **👥 Users** link in the header: add people, set and reset their
@@ -100,6 +107,30 @@ Re-running `add-user.js` with an existing username resets that user's password/r
 | `SWARMBOX_TIMEOUT_MS`| `120000`                             | Per-call timeout (the pull is big)       |
 | `SESSION_TTL_MS`     | `43200000` (12h)                     | Sliding session lifetime                 |
 | `API_KEY`            | unset (lane disabled)                | `X-Api-Key` for `/api/requests*` ONLY — lets the build side read/answer the queue without a browser session |
+
+## The Today board
+
+The first thing on the feed and the dashboard: today's tasks, and the day's note.
+
+**Tasks** are the groups whose weekly plan has a note for today (`Mon → Send To CMP
+7AM`). "Today" is the **viewer's** day — the board is read standing in front of a
+screen on the floor, so the date always comes from that browser.
+
+- **✓ done** — anyone signed in, viewers included, checks a task off. It leaves the
+  list on the spot and collapses into a `N done today · show` line that records who
+  ticked it and when, with an **undo** — a mis-tap must not lose a task. The tick is
+  dated, so it expires on its own: today's ✓ never hides the same task next week.
+- **✕** — editors only. This **deletes** that day's note off the group for good; it
+  will not come back next week. Confirmed before it happens, and it's the only one of
+  the two that changes what the week says.
+
+**The day's note** is one free-text line for the day, written by a manager and read by
+everyone. Editors get **✎ Notes**, which opens this week Monday-to-Sunday with the
+date beside each day, so Friday's note can be written on Monday. Viewers get no
+editing affordance at all — the routes enforce it too (`403` without `editor`).
+
+Both live in `data/today-board.json` and age out on their own: ticks after 21 days,
+notes after 120.
 
 ## The requests channel
 

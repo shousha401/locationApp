@@ -103,24 +103,16 @@
     .gedit { padding:2px 10px; border-radius:7px; border:1px solid var(--line); background:none;
       color:var(--muted); cursor:pointer; font-size:11px; margin-left:8px; }
     .gedit:hover { border-color:var(--accent); color:var(--accent); }
+    .gedit.gx { margin-left:4px; padding:2px 8px; }
+    .gedit.gx:hover { border-color:var(--err); color:var(--err); }
     .redcount { color:var(--err); font-weight:700; }
 
-    /* Today's moves. This is the one thing on the page someone should be able
-       to read from across the room without touching anything, so it sits above
-       the tiles and is set larger than everything around it. */
-    .plan { margin:0 0 16px; padding:14px 18px; border-radius:11px; background:var(--panel);
-      border:1px solid var(--line); border-left:3px solid var(--accent2); }
-    .plan h3 { margin:0 0 9px; font-size:11px; text-transform:uppercase; letter-spacing:.07em; color:var(--muted); }
-    .plan ul { margin:0; padding:0; list-style:none; display:flex; flex-wrap:wrap; gap:9px 26px; }
-    .plan li { font-size:17px; }
-    .plan .to { color:var(--muted); margin:0 8px; }
-    .plan .dest { color:var(--accent2); font-weight:700; }
-    .plan .dest a { color:var(--accent2); }
-    .plan .none { color:var(--muted); font-size:13px; }
+    /* Today's tasks and the day's note are the one thing on the page someone
+       should be able to read from across the room, so they sit above the tiles.
+       The board itself (and its styles) is today.js, shared with the feed. */
+    #planStrip { margin-bottom:16px; }
     /* The same instruction, repeated on the group's own line — someone reading
        All inventory shouldn't have to scroll back up to learn where it goes. */
-    .today-dest { color:var(--accent2); font-weight:700; margin-left:9px; white-space:nowrap; }
-    .today-dest a { color:var(--accent2); }
     .weekplan { padding:2px 10px 8px; font-size:12px; color:var(--muted); }
     .weekplan b { color:var(--text); font-weight:600; }
     .weekplan .d { color:var(--accent2); }
@@ -226,6 +218,7 @@
     </div>
   </div></div>
 
+  <script src="/today.js"></script>
   <script>
     const $ = (id) => document.getElementById(id);
     const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) =>
@@ -246,7 +239,13 @@
       const shown = g.products.slice(0, GRP_CODES_SHOWN)
         .map((p) => `<span class="mono">${esc(p.item)}</span>`).join(' · ');
       const rest = g.products.length - Math.min(g.products.length, GRP_CODES_SHOWN);
-      return (shown || `<i>nothing ${gonePhrase(g)}</i>`)
+      // Nothing to list: say it once, with the size of the group, rather than
+      // pairing an empty list with a count of what's missing from it.
+      if (!shown) {
+        return `<i>${fmtInt(g.total)} product${g.total === 1 ? '' : 's'} · `
+          + `${g.filtered ? 'none shown' : 'none on hand'}</i>`;
+      }
+      return shown
         + (rest ? ` +${fmtInt(rest)} more` : '')
         + (g.missing.length ? ` · ${fmtInt(g.missing.length)} ${gonePhrase(g)}` : '');
     }
@@ -261,14 +260,7 @@
     const DAY_FULL = { mon: 'Monday', tue: 'Tuesday', wed: 'Wednesday', thu: 'Thursday',
       fri: 'Friday', sat: 'Saturday', sun: 'Sunday' };
     const todayKey = () => ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'][new Date().getDay()];
-    // A destination that looks like a bin links through to the feed; anything
-    // else ("Line 3", "Grind room") is a place the app knows nothing about and
-    // is left as plain text rather than a link that would 404 on arrival.
-    const LOC_CODE = /^[A-Z0-9]+(?:\.[A-Z0-9]+)+$/;
-    const destHtml = (d) => (LOC_CODE.test(String(d).toUpperCase())
-      ? `<a href="/?loc=${encodeURIComponent(d)}">${esc(d)}</a>` : esc(d));
     const planOf = (g) => (g && g.plan) || {};
-    const destToday = (g) => planOf(g)[todayKey()] || '';
     // This week's dates (Monday-anchored) so each weekday row can show its date.
     function weekDates() {
       const now = new Date();
@@ -280,22 +272,6 @@
         out[k] = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
       });
       return out;
-    }
-
-    // Today's tasks — every group with a note for TODAY, pulled together so the
-    // floor reads "what moves where today" at a glance instead of opening each group.
-    function renderToday() {
-      const k = todayKey();
-      const dateStr = new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
-      const tasks = (GROUPS || []).filter((g) => g.plan && g.plan[k])
-        .sort((a, b) => String(a.name).localeCompare(String(b.name)));
-      $('planStrip').innerHTML = `<div class="plan">
-        <h3>📋 Today · ${esc(dateStr)}</h3>
-        ${tasks.length
-          ? `<ul>${tasks.map((g) => `<li>${esc(g.name)}<span class="to">→</span>`
-            + `<span class="dest">${esc(g.plan[k])}</span></li>`).join('')}</ul>`
-          : `<div class="none">No tasks scheduled for today.</div>`}
-      </div>`;
     }
 
     function daysSince(dateStr) {
@@ -382,11 +358,23 @@
       if (!res.ok) { $('gerrbox').textContent = j.error || 'Could not save.'; return; }
       closeEditor(); load();
     });
+    // Removing a group, from its ✕ on the row or from the editor's button — one
+    // path, so the two can't drift apart on wording or on what gets refreshed.
+    async function removeGroup(id) {
+      const g = (O.groups || []).find((x) => x.id === id);
+      if (!g) return false;
+      if (!confirm(`Remove the group "${g.name}"?\n\n`
+        + 'The products themselves are untouched — they go back to reading as their own '
+        + "lines. Any day notes on this group go with it, including today's task.")) return false;
+      const res = await fetch('/api/groups/' + id, { method: 'DELETE' });
+      if (!res.ok) return false;
+      GRP_OPEN.delete(id);
+      await load();
+      TodayBoard.refresh(true); // the board lists groups too — don't leave it a task behind
+      return true;
+    }
     $('gdel').addEventListener('click', async () => {
-      if (EDIT_ID == null) return;
-      if (!confirm('Delete this group? The products themselves are untouched.')) return;
-      await fetch('/api/groups/' + EDIT_ID, { method: 'DELETE' });
-      closeEditor(); load();
+      if (EDIT_ID != null && await removeGroup(EDIT_ID)) closeEditor();
     });
 
     // One-tap zone buttons, derived from the codes themselves (GT.2 → GT.2.Z1 …)
@@ -498,6 +486,10 @@
     const INV_OPEN = new Set();
     // Which named groups are expanded to the products inside them.
     const GRP_OPEN = new Set();
+    // Are the groups with nothing on hand showing? Off by default — that's the
+    // point of folding them away — and kept outside the render so the 60s
+    // refresh doesn't shut them again while a manager is working in there.
+    let GRP_EMPTY_OPEN = false;
     // Pallet IDs read as "017 633 246" but get typed without spaces.
     const squash = (s) => String(s || '').toUpperCase().replace(/\s+/g, '');
 
@@ -584,13 +576,20 @@
       // groups actually rendered, so a filter can never drop a product out of
       // both lists and make it look like it isn't in GT.
       const named = namedGroups(rows, q !== '');
+      // A group with nothing on hand is a real group having a quiet week, not a
+      // line worth reading — it prints as a row of dashes. So it comes off the
+      // list and collapses into one countable line that a manager can open to
+      // edit or remove it. (Under a filter namedGroups has already dropped them.)
+      const namedOn = named.filter((g) => g.products.length);
+      const namedOff = named.filter((g) => !g.products.length);
       const claimed = new Set(named.flatMap((g) => g.products.map((p) => p.item)));
       const loose = byItem.filter((g) => !claimed.has(g.item));
       const sorted = loose.sort((INV_SORTS.find((s) => s[0] === INV_SORT) || INV_SORTS[0])[2]);
 
       $('invCount').textContent =
         `${fmtInt(byItem.length)} products`
-        + (claimed.size ? ` · ${fmtInt(claimed.size)} in ${fmtInt(named.length)} group${named.length === 1 ? '' : 's'}` : '')
+        + (claimed.size ? ` · ${fmtInt(claimed.size)} in ${fmtInt(namedOn.length)} group${namedOn.length === 1 ? '' : 's'}` : '')
+        + (namedOff.length ? ` · ${fmtInt(namedOff.length)} group${namedOff.length === 1 ? '' : 's'} with nothing on hand` : '')
         + ` · ${fmtInt(rows.length)} of ${fmtInt(INV.length)} pallet lines`;
 
       // Totals for whatever is filtered — the same read-off-the-zone trick the
@@ -628,7 +627,7 @@
       // A group is the same fold as a product, so it prints the same seven
       // columns — a manager reads "Grassfed" exactly the way they read an item.
       const isMgr = ME.role === 'editor' || ME.role === 'admin';
-      const grpRows = named.map((g) => {
+      const grpRow = (g) => {
         // Filtering forces groups open for the same reason it forces products
         // open — and now more so: a grouped item has no row of its own to fall
         // back to, so a collapsed group would swallow the very hit typed for.
@@ -638,7 +637,8 @@
         return `
           <tr class="click grp" data-grp="${g.id}">
             <td><span class="caret">${open ? '▾' : '▸'}</span><span class="gname">${esc(g.name)}</span>
-              ${isMgr ? `<button class="gedit" data-edit="${g.id}">edit</button>` : ''}
+              ${isMgr ? `<button class="gedit" data-edit="${g.id}">edit</button>`
+                + `<button class="gedit gx" data-del="${g.id}" title="Remove the group '${esc(g.name)}' — the products themselves stay">✕</button>` : ''}
               <div class="desc" style="padding-left:11px">${codeList(g)}</div></td>
             <td class="num">${fmtInt(g.pallets.length)}${g.red ? ` <span class="redcount">${fmtInt(g.red)}🔴</span>` : ''}</td>
             <td class="mono">${esc(locSummary(g.locations)) || '—'}</td>
@@ -670,12 +670,20 @@
                 <td class="num">0</td><td colspan="5">${gonePhrase(g)}</td></tr>`).join('')}</tbody></table>`
             : '<span class="desc">None of these products are in GT right now.</span>'}
           </td></tr>`);
-      }).join('');
+      };
+
+      // The quiet groups, behind one line. Never silently dropped: the count is
+      // always on screen, and opening it gives back the same row — edit, ✕ and all.
+      const emptyRows = !namedOff.length ? '' : `
+        <tr class="sechead"><td colspan="7"><button class="link" id="grpEmptyToggle">
+          ${fmtInt(namedOff.length)} group${namedOff.length === 1 ? '' : 's'} with nothing on hand
+          · ${GRP_EMPTY_OPEN ? 'hide' : 'show'}</button></td></tr>`
+        + (GRP_EMPTY_OPEN ? namedOff.map(grpRow).join('') : '');
 
       $('inv').innerHTML = `
         <thead><tr><th>Item</th><th class="num">Pallets</th><th>Location</th><th>Oldest since</th>
           <th>States · oldest received</th><th class="num">Cases</th><th class="num">Weight</th></tr></thead>
-        <tbody>${grpRows}${named.length ? `
+        <tbody>${namedOn.map(grpRow).join('')}${emptyRows}${named.length ? `
         <tr class="sechead"><td colspan="7">${sorted.length ? 'Everything else'
           : 'Every product on hand is in a group above'}</td></tr>` : ''}${page.map((g) => {
           const open = forceOpen || INV_OPEN.has(g.item);
@@ -715,8 +723,11 @@
     // products in it; the bin links inside still go through to the feed page.
     $('inv').addEventListener('click', (e) => {
       if (e.target.closest('a')) return;
+      if (e.target.closest('#grpEmptyToggle')) { GRP_EMPTY_OPEN = !GRP_EMPTY_OPEN; renderInventory(); return; }
       const ed = e.target.closest('[data-edit]');
       if (ed) { openEditor(Number(ed.dataset.edit)); return; }
+      const del = e.target.closest('[data-del]');
+      if (del) { removeGroup(Number(del.dataset.del)); return; }
       const tr = e.target.closest('tr.click');
       if (!tr) return;
       if (tr.dataset.grp) {
@@ -773,7 +784,7 @@
       GROUPS = o.groups || [];
       DESCS = new Map((o.allProducts || []).map((p) => [p.item, p.description]));
       $('newGroup').classList.toggle('hidden', !(ME.role === 'editor' || ME.role === 'admin'));
-      renderToday();
+      TodayBoard.refresh();
       INV = o.palletRows || [];
       renderInvSorts();
       renderInventory();
@@ -793,6 +804,10 @@
         ME = await (await fetch('/api/session')).json();
         $('who').textContent = ME.username;
       } catch (_) { location.href = '/login.html'; return; }
+      // Clearing a day off the board edits the group itself, so the page behind
+      // it (where the same week is printed on the group's row) has to redraw.
+      TodayBoard.onChange = load;
+      TodayBoard.mount({ el: $('planStrip'), me: ME });
       await load();
       setInterval(load, 60000);
     }

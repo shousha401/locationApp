@@ -113,6 +113,23 @@ function update(id, patch, who) {
   return g;
 }
 
+// Clear ONE weekday's note, leaving the rest of the week alone. The Today board
+// deletes through here (its ✕), so checking a task off for today and taking the
+// instruction off the week for good stay two different acts.
+function clearDay(id, day, who) {
+  const g = get(id);
+  if (!g) return null;
+  day = String(day || '').toLowerCase();
+  if (!DAYS.includes(day)) return { error: 'Not a day of the week' };
+  if (!g.plan || !g.plan[day]) return { error: 'Nothing on that day' };
+  const was = g.plan[day];
+  delete g.plan[day];
+  g.updatedBy = who || null;
+  g.updatedAt = new Date().toISOString();
+  persist();
+  return { group: g, day, cleared: was };
+}
+
 function remove(id) {
   const g = get(id);
   if (!g) return null;
@@ -121,4 +138,4 @@ function remove(id) {
   return g;
 }
 
-module.exports = { list, get, create, update, remove, DAYS };
+module.exports = { list, get, create, update, clearDay, remove, DAYS };

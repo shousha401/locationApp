@@ -11,6 +11,7 @@ const inventory = require('./backend/inventory');
 const notes = require('./backend/notes');
 const requests = require('./backend/requests');
 const groups = require('./backend/groups');
+const today = require('./backend/today');
 
 const app = express();
 app.use(express.json({ limit: '256kb' }));
@@ -75,11 +76,58 @@ app.post('/api/groups', auth.requireEditor, (req, res) => {
 app.put('/api/groups/:id', auth.requireEditor, (req, res) => {
   groupResult(res, groups.update(req.params.id, req.body || {}, req.user.username), req.user.username, 'updated');
 });
+// Clear one weekday's note off a group — the Today board's ✕. Separate from a
+// done tick on purpose: this takes the instruction off the week for good.
+app.delete('/api/groups/:id/plan/:day', auth.requireEditor, (req, res) => {
+  const r = groups.clearDay(req.params.id, req.params.day, req.user.username);
+  if (!r) return res.status(404).json({ error: 'No such group' });
+  if (r.error) return res.status(400).json({ error: r.error });
+  console.log(`[Groups] ${req.user.username} cleared ${r.day} on '${r.group.name}' ('${r.cleared}')`);
+  res.json(r.group);
+});
+
 app.delete('/api/groups/:id', auth.requireEditor, (req, res) => {
   const g = groups.remove(req.params.id);
   if (!g) return res.status(404).json({ error: 'No such group' });
   console.log(`[Groups] ${req.user.username} deleted '${g.name}'`);
   res.json({ ok: true, removed: g.name });
+});
+
+// ── Today board ──────────────────────────────────────────────────────────────
+// What's been checked off, and the manager's note for the day. The date always
+// comes from the browser — the board is read on the floor, so "today" is the
+// viewer's today, not the server's.
+app.get('/api/today', (req, res) => {
+  const date = today.isDate(req.query.date) ? req.query.date : today.todayLocal();
+  const from = today.isDate(req.query.from) ? req.query.from : date;
+  const to = today.isDate(req.query.to) ? req.query.to : date;
+  res.json({ date, done: today.doneFor(date), notes: today.notesRange(from, to) });
+});
+
+// Anyone signed in may tick a task off — the people doing the work on the floor
+// are viewers, and a board only they can read but not check off is a board
+// nobody keeps current.
+app.post('/api/today/done', (req, res) => {
+  const b = req.body || {};
+  const r = today.setDone(b.date, b.groupId, !!b.done, req.user.username);
+  if (r.error) return res.status(400).json({ error: r.error });
+  const g = groups.get(b.groupId);
+  console.log(`[Today] ${req.user.username} ${r.done ? 'checked off' : 'un-checked'} `
+    + `'${g ? g.name : r.groupId}' for ${r.date}`);
+  res.json(r);
+});
+
+// The day's note: everybody reads, editors write.
+app.put('/api/today/note/:date', auth.requireEditor, (req, res) => {
+  const text = (req.body && req.body.text) || '';
+  if (String(text).length > today.MAX_NOTE) {
+    return res.status(400).json({ error: `Keep it under ${today.MAX_NOTE} characters` });
+  }
+  const r = today.setNote(req.params.date, text, req.user.username);
+  if (r.error) return res.status(400).json({ error: r.error });
+  console.log(`[Today] ${req.user.username} ${r.text ? 'wrote' : 'cleared'} the note for ${r.date}`
+    + `${r.text ? `: ${r.text.slice(0, 80)}` : ''}`);
+  res.json(r);
 });
 
 // ── Build-requests channel ───────────────────────────────────────────────────
