@@ -9,6 +9,12 @@
 // schedule would go blank the moment nobody re-entered it, which is exactly the
 // failure this is meant to remove.
 //
+// Separately, a group can carry ONE-OFF DATES: a note tied to one exact
+// calendar date that does NOT repeat — for the thing that happens once, not
+// every week (a special pickup on the 15th, say). This is deliberately a
+// second, independent field from `plan`, not a replacement for it: existing
+// groups' weekly instructions keep working exactly as before.
+//
 // App-owned, like notes: stored on disk (data/product-groups.json, gitignored),
 // never touches Swarmbox. Editors and admins manage them; everyone sees them.
 
@@ -19,9 +25,11 @@ const FILE = path.join(__dirname, '..', 'data', 'product-groups.json');
 const MAX_NAME = 60;
 const MAX_ITEMS = 300;
 const MAX_NOTE = 200;
+const MAX_DATES = 366; // a year's worth of one-off notes is plenty; a safety cap, not a product limit
 const DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-let groups = []; // [{ id, name, items:[codes], plan:{day:dest}, updatedBy, updatedAt }]
+let groups = []; // [{ id, name, items:[codes], plan:{day:dest}, dates:{date:note}, updatedBy, updatedAt }]
 
 function load() {
   let raw;
@@ -71,19 +79,33 @@ function cleanPlan(obj) {
   return out;
 }
 
+// One-off dates: a free-text NOTE per exact calendar date, same shape as the
+// weekly plan but keyed by YYYY-MM-DD instead of a weekday — so it applies
+// once, not every week. Same "blank drops the key" rule as cleanPlan.
+function cleanDates(obj) {
+  const out = {};
+  if (!obj || typeof obj !== 'object') return out;
+  for (const [d, v] of Object.entries(obj)) {
+    if (!DATE_RE.test(d) || Object.keys(out).length >= MAX_DATES) continue;
+    const text = String(v == null ? '' : v).trim().slice(0, MAX_NOTE);
+    if (text) out[d] = text;
+  }
+  return out;
+}
+
 const list = () => groups.slice();
 const get = (id) => groups.find((g) => g.id === Number(id)) || null;
 const nameTaken = (name, exceptId) => groups.some(
   (g) => g.id !== exceptId && g.name.toLowerCase() === name.toLowerCase());
 
-function create(name, items, plan, who) {
+function create(name, items, plan, dates, who) {
   name = cleanName(name);
   items = cleanItems(items);
   if (!name) return { error: 'Group needs a name' };
   if (!items.length) return { error: 'Pick at least one product' };
   if (nameTaken(name, null)) return { error: `A group called '${name}' already exists` };
   const id = groups.reduce((m, g) => Math.max(m, g.id), 0) + 1;
-  const rec = { id, name, items, plan: cleanPlan(plan),
+  const rec = { id, name, items, plan: cleanPlan(plan), dates: cleanDates(dates),
     updatedBy: who || null, updatedAt: new Date().toISOString() };
   groups.push(rec);
   persist();
@@ -104,9 +126,10 @@ function update(id, patch, who) {
     if (!items.length) return { error: 'Pick at least one product' };
     g.items = items;
   }
-  // An all-blank plan is a legitimate edit — a manager clearing the week — so
-  // this replaces rather than merges. Omitting `plan` entirely leaves it alone.
+  // An all-blank plan/dates is a legitimate edit — a manager clearing it — so
+  // these replace rather than merge. Omitting a field entirely leaves it alone.
   if (patch.plan !== undefined) g.plan = cleanPlan(patch.plan);
+  if (patch.dates !== undefined) g.dates = cleanDates(patch.dates);
   g.updatedBy = who || null;
   g.updatedAt = new Date().toISOString();
   persist();

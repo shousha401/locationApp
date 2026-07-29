@@ -164,6 +164,25 @@
       font:inherit; font-size:13px; border-radius:8px; border:1px solid var(--line);
       background:var(--panel2); color:var(--text); }
     .weekcal-note textarea:focus { outline:none; border-color:var(--accent); }
+
+    /* One-off dates: a second, independent note per exact calendar date (not a
+       weekday) — for the thing that happens once, not every week. A real
+       month calendar so it can reach any future month, unlike the week strip
+       above which only ever shows the current Mon-Sun. */
+    .gcal-nav { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
+    .gcal-nav h5 { margin:0; font-size:13px; min-width:130px; text-align:center; font-weight:600; }
+    .gcal-grid { display:grid; grid-template-columns:repeat(7,1fr); gap:4px; }
+    .gcal-dow { font-size:9px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted);
+      text-align:center; padding-bottom:3px; }
+    .gcal-cell { display:flex; flex-direction:column; align-items:center; justify-content:flex-start;
+      gap:3px; min-height:36px; padding:4px 2px; border-radius:7px; border:1px solid var(--line);
+      background:var(--panel2); color:var(--text); cursor:pointer; font:inherit; font-size:12px; }
+    .gcal-cell:hover { border-color:var(--accent); }
+    .gcal-cell.out { opacity:.4; }
+    .gcal-cell.today { border-color:var(--accent2); }
+    .gcal-cell.selected { border-color:var(--accent); box-shadow:inset 0 0 0 1px var(--accent); }
+    .gcal-dot { width:5px; height:5px; border-radius:50%; background:var(--accent2); }
+    .gcal-note { margin-top:10px; }
   </style>
 </head>
 <body>
@@ -220,6 +239,19 @@
       <div class="weekcal-label" id="gcallabel"></div>
       <textarea id="gcalnote" maxlength="200" placeholder="note (optional)"></textarea>
     </div>
+
+    <h4>One-time dates <span>— optional. A note for one specific date that does NOT repeat.</span></h4>
+    <div class="gcal-nav">
+      <button type="button" class="gedit" id="gdprev" title="Previous month">‹</button>
+      <h5 id="gdtitle"></h5>
+      <button type="button" class="gedit" id="gdnext" title="Next month">›</button>
+    </div>
+    <div class="gcal-grid" id="gdgrid"></div>
+    <div class="gcal-note">
+      <div class="weekcal-label" id="gdlabel"></div>
+      <textarea id="gdnote" maxlength="200" placeholder="note (optional)"></textarea>
+    </div>
+
     <div class="gerr" id="gerrbox"></div>
     <div class="gactions">
       <button class="gdelete hidden" id="gdel">Delete group</button>
@@ -351,6 +383,73 @@
     // renderDayCal() runs (switching days or reopening) rather than on every key.
     $('gcalnote').addEventListener('input', () => { DAY_NOTES[SEL_DAY] = $('gcalnote').value; });
 
+    // ── One-off dates ────────────────────────────────────────────────────────
+    // A second, independent note per exact calendar date — for the thing that
+    // happens once, not every week. Unlike the week strip above, this needs a
+    // real month calendar so it can reach any future month. Everything here is
+    // client-side: a group's whole `dates` map is already loaded via /api/groups
+    // in one shot, so there's no per-month fetch the way the Today board needs.
+    const p2 = (n) => String(n).padStart(2, '0');
+    const ymd = (d) => `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
+    const fromYmd = (s) => { const [y, mo, d] = s.split('-').map(Number); return new Date(y, mo - 1, d); };
+    function monthGrid(year, month) {
+      const first = new Date(year, month, 1);
+      const last = new Date(year, month + 1, 0);
+      const start = new Date(year, month, 1 - ((first.getDay() + 6) % 7));
+      const cells = [];
+      const cur = new Date(start);
+      while (cur <= last || cells.length % 7 !== 0) {
+        cells.push({ date: ymd(cur), day: cur.getDate(), inMonth: cur.getMonth() === month });
+        cur.setDate(cur.getDate() + 1);
+      }
+      return cells;
+    }
+
+    let DATE_NOTES = {};   // date -> text buffer, seeded from g.dates on open
+    let DCAL_YEAR = 0;
+    let DCAL_MONTH = 0;
+    let DCAL_SELECTED = null;
+
+    function renderDateCal() {
+      const grid = monthGrid(DCAL_YEAR, DCAL_MONTH);
+      const today = ymd(new Date());
+      $('gdtitle').textContent =
+        new Date(DCAL_YEAR, DCAL_MONTH, 1).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+      const dow = DAYS.map(([, label]) => `<div class="gcal-dow">${label}</div>`).join('');
+      $('gdgrid').innerHTML = dow + grid.map((c) => {
+        const has = !!(DATE_NOTES[c.date] && DATE_NOTES[c.date].trim());
+        const cls = ['gcal-cell', !c.inMonth ? 'out' : '', c.date === today ? 'today' : '',
+          c.date === DCAL_SELECTED ? 'selected' : ''].filter(Boolean).join(' ');
+        return `<button type="button" class="${cls}" data-date="${c.date}">
+          ${c.day}${has ? '<span class="gcal-dot"></span>' : ''}</button>`;
+      }).join('');
+      if (!DCAL_SELECTED) { $('gdlabel').textContent = ''; $('gdnote').value = ''; return; }
+      $('gdlabel').textContent =
+        fromYmd(DCAL_SELECTED).toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
+      $('gdnote').value = DATE_NOTES[DCAL_SELECTED] || '';
+    }
+    function selectDate(d) {
+      if (d === DCAL_SELECTED) return;
+      DCAL_SELECTED = d;
+      renderDateCal();
+      $('gdnote').focus();
+    }
+    function navDateCal(delta) {
+      const d = new Date(DCAL_YEAR, DCAL_MONTH + delta, 1);
+      DCAL_YEAR = d.getFullYear();
+      DCAL_MONTH = d.getMonth();
+      renderDateCal();
+    }
+    $('gdgrid').addEventListener('click', (e) => {
+      const b = e.target.closest('[data-date]');
+      if (b) selectDate(b.dataset.date);
+    });
+    $('gdprev').addEventListener('click', () => navDateCal(-1));
+    $('gdnext').addEventListener('click', () => navDateCal(1));
+    $('gdnote').addEventListener('input', () => {
+      if (DCAL_SELECTED) DATE_NOTES[DCAL_SELECTED] = $('gdnote').value;
+    });
+
     function openEditor(id) {
       const g = id != null ? (O.groups || []).find((x) => x.id === id) : null;
       EDIT_ID = g ? g.id : null;
@@ -375,6 +474,13 @@
       DAY_NOTES = { ...planOf(g) };
       SEL_DAY = todayKey();
       renderDayCal();
+      // One-off dates: same copy-not-alias reasoning, keyed by exact date instead.
+      DATE_NOTES = { ...(g && g.dates) };
+      const now = new Date();
+      DCAL_YEAR = now.getFullYear();
+      DCAL_MONTH = now.getMonth();
+      DCAL_SELECTED = null;
+      renderDateCal();
       $('gmodal').classList.add('on');
     }
     const closeEditor = () => $('gmodal').classList.remove('on');
@@ -393,10 +499,12 @@
       const items = [...$('gpick').querySelectorAll('input:checked')].map((i) => i.value);
       DAY_NOTES[SEL_DAY] = $('gcalnote').value.trim(); // capture whatever's in the box right now
       const plan = { ...DAY_NOTES };
+      if (DCAL_SELECTED) DATE_NOTES[DCAL_SELECTED] = $('gdnote').value.trim();
+      const dates = { ...DATE_NOTES };
       const url = EDIT_ID != null ? '/api/groups/' + EDIT_ID : '/api/groups';
       const res = await fetch(url, {
         method: EDIT_ID != null ? 'PUT' : 'POST',
-        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, items, plan }),
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, items, plan, dates }),
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok) { $('gerrbox').textContent = j.error || 'Could not save.'; return; }

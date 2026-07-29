@@ -64,14 +64,16 @@ const groupResult = (res, r, who, verb) => {
   if (!r) return res.status(404).json({ error: 'No such group' });
   if (r.error) return res.status(400).json({ error: r.error });
   const days = Object.keys(r.plan || {}).length;
+  const dates = Object.keys(r.dates || {}).length;
   console.log(`[Groups] ${who} ${verb} '${r.name}' (${r.items.length} items`
-    + `${days ? `, notes on ${days} day${days === 1 ? '' : 's'}` : ''})`);
+    + `${days ? `, notes on ${days} day${days === 1 ? '' : 's'}` : ''}`
+    + `${dates ? `, ${dates} one-off date${dates === 1 ? '' : 's'}` : ''})`);
   res.json(r);
 };
 app.get('/api/groups', (_req, res) => res.json({ groups: groups.list(), days: groups.DAYS }));
 app.post('/api/groups', auth.requireEditor, (req, res) => {
   const b = req.body || {};
-  groupResult(res, groups.create(b.name, b.items, b.plan, req.user.username), req.user.username, 'created');
+  groupResult(res, groups.create(b.name, b.items, b.plan, b.dates, req.user.username), req.user.username, 'created');
 });
 app.put('/api/groups/:id', auth.requireEditor, (req, res) => {
   groupResult(res, groups.update(req.params.id, req.body || {}, req.user.username), req.user.username, 'updated');
