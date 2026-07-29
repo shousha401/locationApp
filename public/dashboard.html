@@ -230,6 +230,7 @@
         <span class="grow"></span>
         <span><button class="zbtn hidden" id="newGroup">＋ New group</button>
           <button class="zbtn" id="invZoom">⛶ Full screen</button></span></h2>
+      <div class="zones" id="invTabs" style="padding:10px 16px 0"></div>
       <div class="filter">
         <div class="zones" id="invSorts"></div>
         <input id="invFilter" placeholder="Filter — pallet, item, description, or location" autocomplete="off">
@@ -659,9 +660,14 @@
     ];
     const INV_PAGE = 200;
     let INV = [], INV_SORT = 'old', INV_SHOWN = INV_PAGE;
+    // 'products': the normal per-item view. 'mixed': pallets carrying more than
+    // one product, grouped by pallet id instead.
+    let INV_TAB = 'products';
     // Which products are expanded to their individual pallets. Kept outside the
     // render so the 60s auto-refresh doesn't collapse what someone is reading.
     const INV_OPEN = new Set();
+    // Which mixed pallets are expanded to the products on them.
+    const MIX_OPEN = new Set();
     // Which named groups are expanded to the products inside them.
     const GRP_OPEN = new Set();
     // Are the groups with nothing on hand showing? Off by default — that's the
@@ -707,6 +713,25 @@
         Object.assign({ item, description: ps[0].description }, foldPallets(ps)));
     }
 
+    // One display row per PALLET, for the pallets carrying more than one
+    // product. The per-product view above folds by item, so two products
+    // sharing one physical pallet just read as two unrelated rows — this is
+    // the other cut, grouped by pallet id, kept to only the ones actually
+    // worth a second look (a single-product pallet is the normal case).
+    function mixedPalletGroups(rows) {
+      const m = new Map();
+      for (const p of rows) {
+        if (!p.pallet) continue; // nothing to group a bare "no pallet" line under
+        let a = m.get(p.pallet);
+        if (!a) { a = []; m.set(p.pallet, a); }
+        a.push(p);
+      }
+      return [...m.entries()]
+        .filter(([, ps]) => new Set(ps.map((p) => p.item)).size > 1)
+        .map(([pallet, ps]) => Object.assign({ pallet,
+          items: ps.slice().sort((a, b) => cmpStr(a.item, b.item)) }, foldPallets(ps)));
+    }
+
     // A manager group folded over whatever is currently in view. Groups whose
     // products are all filtered out drop off rather than showing as empty
     // lines; with no filter every group stays visible, zeroes included.
@@ -731,6 +756,21 @@
       $('invSorts').innerHTML = INV_SORTS.map(([k, label]) =>
         `<button class="zbtn ${INV_SORT === k ? 'on' : ''}" data-s="${k}">${esc(label)}</button>`).join('');
     }
+
+    // The mixed-pallet count badges the tab itself, so a manager can tell
+    // there's something to look at before ever switching to it.
+    function renderInvTabs() {
+      const n = mixedPalletGroups(INV).length;
+      $('invTabs').innerHTML = `
+        <button class="zbtn ${INV_TAB === 'products' ? 'on' : ''}" data-tab="products">All products</button>
+        <button class="zbtn ${INV_TAB === 'mixed' ? 'on' : ''}" data-tab="mixed">⚠ Mixed pallets${n ? ` · ${fmtInt(n)}` : ''}</button>`;
+    }
+    $('invTabs').addEventListener('click', (e) => {
+      const b = e.target.closest('[data-tab]');
+      if (!b || b.dataset.tab === INV_TAB) return;
+      INV_TAB = b.dataset.tab; INV_SHOWN = INV_PAGE;
+      renderInvTabs(); renderInventory();
+    });
     $('invSorts').addEventListener('click', (e) => {
       const b = e.target.closest('.zbtn');
       if (!b) return;
@@ -738,7 +778,86 @@
       renderInvSorts(); renderInventory();
     });
 
+    // A mixed pallet's own products stay together no matter what's typed in the
+    // filter — computed from the FULL set, then the filter picks which pallets
+    // to show, never which of a shown pallet's products. Splitting one pallet's
+    // products across a filter match/no-match would misrepresent what's on it.
+    function renderMixedInventory() {
+      const raw = $('invFilter').value.trim().toUpperCase();
+      const q = squash(raw);
+      const allMixed = mixedPalletGroups(INV);
+      const filtered = q
+        ? allMixed.filter((g) => squash(g.pallet).includes(q)
+          || g.items.some((p) => squash(p.item).includes(q)
+            || String(p.description || '').toUpperCase().includes(raw)
+            || p.locations.some((l) => squash(l).includes(q))))
+        : allMixed;
+      const sorted = filtered.sort((a, b) => cmpStr(a.pallet, b.pallet));
+
+      $('invCount').textContent = `${fmtInt(allMixed.length)} mixed pallet${allMixed.length === 1 ? '' : 's'}`;
+      $('invSum').innerHTML = sorted.length
+        ? `Selection: <b>${fmtInt(sorted.length)}</b> pallet${sorted.length === 1 ? '' : 's'}`
+        : (allMixed.length ? 'Nothing matches that filter.' : 'No pallet currently carries more than one product.');
+
+      const page = sorted.slice(0, INV_SHOWN);
+      const forceOpen = q !== '';
+
+      const mixItemRow = (p) => {
+        const sd = daysSince(p.stateDate);
+        const rd = daysSince(p.date);
+        return `
+          <tr><td><span class="mono">${esc(p.item)}</span> <span class="desc">${esc(p.description)}</span></td>
+          <td class="mono">${esc(locSummary(p.locations)) || '—'}</td>
+          <td>${p.stateDate ? `<span class="${p.red ? 'since-late' : ''}">${esc(p.stateDate)}${sd != null ? ` (${fmtInt(sd)}d)` : ''}</span>` : '—'}</td>
+          <td>${p.state ? `<span class="chip ${esc(p.state)}${p.red ? ' late' : ''}">${esc(p.state)}</span>` : '—'}${p.date ? `<div class="desc" style="font-size:10px">received ${esc(p.date)}${rd != null ? ` (${fmtInt(rd)}d)` : ''}</div>` : ''}</td>
+          <td class="num">${wStr(p.cases)}</td>
+          <td class="num">${wStr(p.weight)}</td></tr>`;
+      };
+      const mixRow = (g) => {
+        const open = forceOpen || MIX_OPEN.has(g.pallet);
+        const sd = daysSince(g.since);
+        const rd = daysSince(g.date);
+        return `
+          <tr class="click" data-mix="${esc(g.pallet)}">
+            <td><span class="caret">${open ? '▾' : '▸'}</span><span class="mono">${esc(g.pallet)}</span></td>
+            <td class="num">${fmtInt(g.items.length)}${g.red ? ` <span class="redcount">${fmtInt(g.red)}🔴</span>` : ''}</td>
+            <td class="mono">${esc(locSummary(g.locations)) || '—'}</td>
+            <td>${g.since ? `<span class="${g.red ? 'since-late' : ''}">${esc(g.since)}${sd != null ? ` (${fmtInt(sd)}d)` : ''}</span>` : '—'}</td>
+            <td>${chips(g.states)}${g.date ? `<div class="desc" style="font-size:10px">received ${esc(g.date)}${rd != null ? ` (${fmtInt(rd)}d)` : ''}</div>` : ''}</td>
+            <td class="num">${wStr(asArr(g.cases))}</td>
+            <td class="num">${wStr(asArr(g.weight))}</td>
+          </tr>` + (!open ? '' : `
+          <tr class="lsub" data-mixsub="${esc(g.pallet)}"><td colspan="7">
+            <table class="subtbl">
+              <thead><tr><th>Item</th><th>Location</th><th>Since</th><th>State · received</th>
+                <th class="num">Cases</th><th class="num">Weight</th></tr></thead>
+              <tbody>${g.items.map(mixItemRow).join('')}</tbody>
+            </table>
+          </td></tr>`);
+      };
+
+      $('inv').innerHTML = `
+        <thead><tr><th>Pallet</th><th class="num">Products</th><th>Location</th><th>Oldest since</th>
+          <th>States · oldest received</th><th class="num">Cases</th><th class="num">Weight</th></tr></thead>
+        <tbody>${page.length ? page.map(mixRow).join('')
+          : `<tr><td colspan="7" class="empty">${allMixed.length ? 'Nothing matches that filter.'
+            : 'No pallet currently carries more than one product.'}</td></tr>`}</tbody>`;
+
+      const rest = sorted.length - page.length;
+      $('invMore').classList.toggle('hidden', rest <= 0);
+      if (rest > 0) {
+        $('invMore').innerHTML = `Showing ${fmtInt(page.length)} of ${fmtInt(sorted.length)} mixed pallets.`
+          + `<button data-n="${INV_PAGE}">Show ${fmtInt(Math.min(rest, INV_PAGE))} more</button>`
+          + (rest > INV_PAGE ? '<button data-n="all">Show all</button>' : '');
+      }
+    }
+
     function renderInventory() {
+      const mgr = ME.role === 'editor' || ME.role === 'admin';
+      $('newGroup').classList.toggle('hidden', !mgr || INV_TAB !== 'products');
+      $('invSorts').classList.toggle('hidden', INV_TAB !== 'products');
+      if (INV_TAB === 'mixed') return renderMixedInventory();
+
       const raw = $('invFilter').value.trim().toUpperCase();
       const q = squash(raw);  // pallet/item/location match ignores spacing
       const rows = q
@@ -908,7 +1027,10 @@
       if (del) { removeGroup(Number(del.dataset.del)); return; }
       const tr = e.target.closest('tr.click');
       if (!tr) return;
-      if (tr.dataset.grp) {
+      if (tr.dataset.mix) {
+        const pallet = tr.dataset.mix;
+        if (MIX_OPEN.has(pallet)) MIX_OPEN.delete(pallet); else MIX_OPEN.add(pallet);
+      } else if (tr.dataset.grp) {
         const id = Number(tr.dataset.grp);
         if (GRP_OPEN.has(id)) GRP_OPEN.delete(id); else GRP_OPEN.add(id);
       } else {
@@ -965,6 +1087,7 @@
       TodayBoard.refresh();
       INV = o.palletRows || [];
       renderInvSorts();
+      renderInvTabs();
       renderInventory();
 
       LOCS = o.locations || [];
