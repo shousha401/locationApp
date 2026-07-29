@@ -135,6 +135,7 @@
     .pick:hover { background:rgba(56,189,248,.06); }
     .pick .mono { min-width:64px; }
     .pick .desc { flex:1; }
+    .mixflag { color:var(--warn); font-size:11px; cursor:help; }
     .gactions { display:flex; gap:10px; margin-top:14px; align-items:center; }
     .gactions .grow { flex:1; }
     .gactions button { padding:9px 18px; border-radius:8px; border:0; cursor:pointer; font-weight:700; }
@@ -489,9 +490,14 @@
       // rotated out of GT so editing a group never silently drops them.
       const known = new Set((O.allProducts || []).map((p) => p.item));
       const extras = [...chosen].filter((c) => !known.has(c));
+      // Products that share a pallet with something else — flagged here so a
+      // manager building a group notices before picking, not after.
+      const mixedItems = new Set(mixedPalletGroups(INV).flatMap((mg) => mg.items.map((p) => p.item)));
       $('gpick').innerHTML = (O.allProducts || []).map((p) => `
         <label class="pick"><input type="checkbox" value="${esc(p.item)}" ${chosen.has(p.item) ? 'checked' : ''}>
-          <span class="mono">${esc(p.item)}</span><span class="desc">${esc(p.description)}</span>
+          <span class="mono">${esc(p.item)}</span>
+          ${mixedItems.has(p.item) ? '<span class="mixflag" title="Shares a pallet with another product — see the Mixed Pallets tab">⚠</span>' : ''}
+          <span class="desc">${esc(p.description)}</span>
           <span class="desc">${fmtInt(p.pallets)} plt</span></label>`).join('')
         + extras.map((c) => `
         <label class="pick"><input type="checkbox" value="${esc(c)}" checked>
