@@ -101,7 +101,12 @@ app.get('/api/today', (req, res) => {
   const date = today.isDate(req.query.date) ? req.query.date : today.todayLocal();
   const from = today.isDate(req.query.from) ? req.query.from : date;
   const to = today.isDate(req.query.to) ? req.query.to : date;
-  res.json({ date, done: today.doneFor(date), notes: today.notesRange(from, to) });
+  res.json({
+    date,
+    done: today.doneFor(date),
+    doneRange: today.doneRange(from, to),
+    notes: today.notesRange(from, to),
+  });
 });
 
 // Anyone signed in may tick a task off — the people doing the work on the floor

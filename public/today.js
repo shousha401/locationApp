@@ -10,8 +10,13 @@
 //     week for good. Checked-off tasks leave the list and collapse into one
 //     "N done today" line, undoable, because a mis-tap must not lose a task.
 //   · the day's note — a manager's line for the day. EVERYONE reads it; only
-//     editors and admins write it, through the ✎ button. There is no inline
-//     editing: a viewer can't put the board into an editable state at all.
+//     editors and admins write it. There is no inline editing here: a viewer
+//     can't put the board into an editable state at all.
+//
+// "📅 Month" opens a calendar (any date, any month) so a manager isn't limited
+// to writing this week's note, and so anyone can see what's scheduled and check
+// tasks off for a day other than today. Same read/write split as above: the
+// checkbox is open to everyone, the note's pencil-edit is editor/admin only.
 //
 // "Today" is the VIEWER's today. The board is read standing in front of a screen
 // on the floor, so every date sent to the API comes from this browser.
@@ -39,6 +44,31 @@
       d.setDate(monday.getDate() + i);
       return { key, label, date: ymd(d), display: d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) };
     });
+  }
+
+  // Parse a YYYY-MM-DD string as a LOCAL date, never via `new Date(str)` — that
+  // parses as UTC and can silently shift a day in any timezone behind UTC,
+  // which is exactly the kind of bug "today is the viewer's today" exists to avoid.
+  const fromYmd = (s) => {
+    const [y, mo, d] = String(s).split('-').map(Number);
+    return new Date(y, mo - 1, d);
+  };
+  const dayKeyOf = (dateStr) => dayKey(fromYmd(dateStr));
+
+  // A Mon-Sun grid for `year`/`month` (0-based), padded with the adjacent
+  // month's leading/trailing days so every row is a full week — standard
+  // calendar-grid shape. Always a multiple of 7 cells (4-6 rows).
+  function monthGrid(year, month) {
+    const first = new Date(year, month, 1);
+    const lastOfMonth = new Date(year, month + 1, 0);
+    const gridStart = new Date(year, month, 1 - ((first.getDay() + 6) % 7));
+    const cells = [];
+    const cur = new Date(gridStart);
+    while (cur <= lastOfMonth || cells.length % 7 !== 0) {
+      cells.push({ date: ymd(cur), day: cur.getDate(), inMonth: cur.getMonth() === month, dow: dayKey(cur) });
+      cur.setDate(cur.getDate() + 1);
+    }
+    return cells;
   }
 
   const CSS = `
@@ -95,6 +125,35 @@
     .tb-actions button { padding:9px 18px; border-radius:8px; border:0; cursor:pointer; font-weight:700; }
     .tb-save { background:var(--accent); color:#04222f; }
     .tb-cancel { background:none; border:1px solid var(--line) !important; color:var(--muted); }
+
+    .tb-sheet.tb-cal { width:min(96vw,640px); }
+    .tb-cal-nav { display:flex; align-items:center; gap:8px; margin-bottom:4px; }
+    .tb-cal-nav h3 { margin:0; font-size:15px; min-width:150px; text-align:center; }
+    .tb-cal-grid { display:grid; grid-template-columns:repeat(7,1fr); gap:4px; margin-top:10px; }
+    .tb-cal-dow { font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted);
+      text-align:center; padding-bottom:4px; }
+    .tb-cal-cell { display:flex; flex-direction:column; align-items:center; justify-content:flex-start;
+      gap:3px; min-height:46px; padding:5px 2px; border-radius:8px; border:1px solid var(--line);
+      background:var(--panel2); color:var(--text); cursor:pointer; font:inherit; }
+    .tb-cal-cell:hover { border-color:var(--accent); }
+    .tb-cal-cell.tb-cal-out { opacity:.4; }
+    .tb-cal-cell.tb-today { border-color:var(--accent2); }
+    .tb-cal-cell.tb-cal-selected { border-color:var(--accent); box-shadow:inset 0 0 0 1px var(--accent); }
+    .tb-cal-daynum { font-size:13px; font-weight:600; }
+    .tb-cal-marks { display:flex; align-items:center; gap:3px; min-height:8px; }
+    .tb-cal-dot { width:6px; height:6px; border-radius:50%; background:var(--accent2); }
+    .tb-cal-dot.tb-cal-done { background:var(--good); }
+    .tb-cal-dot.tb-cal-note { background:var(--warn); }
+    .tb-cal-count { font-size:9px; color:var(--muted); }
+    .tb-cal-detail { margin-top:14px; padding-top:12px; border-top:1px solid var(--line); }
+    .tb-cal-detail h4 { margin:0 0 8px; font-size:13px; }
+    .tb-cal-tasklist { margin:0 0 12px; padding:0; list-style:none; display:flex; flex-direction:column; gap:7px; }
+    .tb-cal-tasklist label { display:flex; align-items:center; gap:9px; font-size:15px; flex-wrap:wrap; }
+    .tb-cal-note textarea { width:100%; min-height:70px; margin-top:8px; resize:vertical; padding:8px 10px;
+      font:inherit; font-size:13px; border-radius:8px; border:1px solid var(--line);
+      background:var(--panel2); color:var(--text); }
+    .tb-cal-note textarea:focus { outline:none; border-color:var(--accent); }
+    .tb-cal-noteactions { display:flex; gap:8px; margin-top:8px; justify-content:flex-end; }
   `;
 
   let EL = null;              // where the board renders
@@ -105,6 +164,17 @@
   let SHOW_DONE = false;      // is the "N done today" list expanded
   let BUSY = false;           // a tick/clear is in flight — don't double-fire
   const isMgr = () => ME.role === 'editor' || ME.role === 'admin';
+
+  // Which groups have a task on a given weekday — shared by today's list and
+  // the month calendar so "what's scheduled" is resolved exactly one way.
+  const tasksForDay = (dow) => GROUPS.filter((g) => g.plan && g.plan[dow])
+    .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+
+  // The month calendar's own state — separate from DONE/NOTES (which back the
+  // always-visible, frequently-polled single-day view) so opening/navigating
+  // the calendar never changes that view's fetch behavior. See saveDayNote()/
+  // setDoneOn() for the one place they deliberately stay in sync: today.
+  let CAL = { year: 0, month: 0, done: {}, notes: {}, selected: null, editing: false, loading: false, error: '' };
 
   function injectCss() {
     if (document.getElementById('tb-css')) return;
@@ -132,8 +202,7 @@
     const k = dayKey(now);
     const date = ymd(now);
     const dateStr = now.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
-    const all = GROUPS.filter((g) => g.plan && g.plan[k])
-      .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+    const all = tasksForDay(k);
     // Checked off means gone from the list — that is the whole point of the tick.
     const open = all.filter((g) => !DONE[String(g.id)]);
     const done = all.filter((g) => DONE[String(g.id)]);
@@ -153,7 +222,7 @@
       <div class="tb-head">
         <h3>📋 Today · ${esc(dateStr)}</h3>
         <div class="tb-grow"></div>
-        ${mgr ? '<button class="tb-btn" id="tb-editnote">✎ Notes</button>' : ''}
+        <button class="tb-btn" id="tb-cal-open">📅 Month</button>
       </div>
       ${open.length ? `<ul class="tb-list">${open.map(taskLi).join('')}</ul>`
         : `<div class="tb-none">${done.length ? 'Everything for today is checked off.'
@@ -177,20 +246,48 @@
   }
 
   // ── Actions ────────────────────────────────────────────────────────────────
+  async function postDone(date, gid, done) {
+    const res = await fetch('/api/today/done', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ date, groupId: String(gid), done }),
+    });
+    return res.ok;
+  }
+
+  // Today's list only — same signature/behavior as before the calendar existed.
   async function setDone(gid, done) {
     if (BUSY) return;
     BUSY = true;
     try {
-      const res = await fetch('/api/today/done', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ date: ymd(new Date()), groupId: String(gid), done }),
-      });
-      if (!res.ok) return;
+      if (!(await postDone(ymd(new Date()), gid, done))) return;
       // Reflect it locally so the task leaves the list on the tap, not on the
       // next poll — someone standing at the screen must see it take.
       if (done) DONE[String(gid)] = { by: ME.username, at: new Date().toISOString() };
       else delete DONE[String(gid)];
       render();
+    } finally { BUSY = false; }
+  }
+
+  // The calendar's generalized version — any date, past/present/future.
+  async function setDoneOn(date, gid, done) {
+    if (BUSY) return;
+    BUSY = true;
+    try {
+      const ok = await postDone(date, gid, done);
+      if (ok) {
+        const day = CAL.done[date] || (CAL.done[date] = {});
+        if (done) day[String(gid)] = { by: ME.username, at: new Date().toISOString() };
+        else { delete day[String(gid)]; if (!Object.keys(day).length) delete CAL.done[date]; }
+        // Keep the always-visible single-day view in sync when today itself changed.
+        if (date === ymd(new Date())) {
+          if (done) DONE[String(gid)] = day[String(gid)];
+          else delete DONE[String(gid)];
+          render();
+        }
+      }
+      // Always re-render — on failure this reverts the checkbox's already-
+      // flipped visual state back to what actually happened server-side.
+      renderCalendarBody();
     } finally { BUSY = false; }
   }
 
@@ -210,75 +307,213 @@
     } finally { BUSY = false; }
   }
 
-  // ── The note editor (editors and admins only) ──────────────────────────────
+  // ── The month calendar ──────────────────────────────────────────────────────
+  // Everyone can open it and check tasks off for any date; only editors and
+  // admins can write that date's note (gated inline in renderCalendarBody()).
   function modal() {
     let m = document.getElementById('tb-modal');
     if (m) return m;
     m = document.createElement('div');
     m.id = 'tb-modal';
     m.className = 'tb-modal';
-    m.innerHTML = `<div class="tb-sheet">
-      <h3>Notes for the week</h3>
-      <div class="tb-sub">One note per day, shown to everyone on the Today board. Read-only for viewers.</div>
-      <div class="tb-rows" id="tb-noterows"></div>
-      <div class="tb-err" id="tb-noteerr"></div>
-      <div class="tb-actions">
-        <button class="tb-cancel" id="tb-notecancel">Cancel</button>
-        <button class="tb-save" id="tb-notesave">Save</button>
+    m.innerHTML = `<div class="tb-sheet tb-cal" id="tb-cal-sheet">
+      <div class="tb-cal-nav">
+        <button class="tb-btn" id="tb-cal-prev" title="Previous month">‹</button>
+        <h3 id="tb-cal-title"></h3>
+        <button class="tb-btn" id="tb-cal-next" title="Next month">›</button>
+        <div class="tb-grow"></div>
+        <button class="tb-btn" id="tb-cal-today">Today</button>
       </div>
+      <div class="tb-sub">Tap a date for its tasks and note. Anyone can check a task off for any date;
+        only editors and admins can write the note.</div>
+      <div class="tb-err" id="tb-cal-err"></div>
+      <div class="tb-cal-grid" id="tb-cal-grid"></div>
+      <div class="tb-cal-detail" id="tb-cal-detail"></div>
+      <div class="tb-actions"><button class="tb-cancel" id="tb-cal-close">Close</button></div>
     </div>`;
     document.body.appendChild(m);
-    m.addEventListener('click', (e) => { if (e.target === m) closeNotes(); });
-    m.querySelector('#tb-notecancel').addEventListener('click', closeNotes);
-    m.querySelector('#tb-notesave').addEventListener('click', saveNotes);
+
+    // The modal lives outside EL (appended to document.body), so it gets its
+    // own delegated listeners rather than sharing board.mount's — same "one
+    // listener, not one per rendered element" pattern as the rest of this file.
+    m.addEventListener('click', (e) => {
+      if (e.target === m) return closeCalendar();
+      const cell = e.target.closest('[data-cal-day]');
+      if (cell) return selectDay(cell.dataset.calDay);
+      const btn = e.target.closest('button');
+      if (!btn) return;
+      if (btn.id === 'tb-cal-close') return closeCalendar();
+      if (btn.id === 'tb-cal-prev') return navMonth(-1);
+      if (btn.id === 'tb-cal-next') return navMonth(1);
+      if (btn.id === 'tb-cal-today') return jumpToday();
+      if (btn.dataset.calEditnote) { CAL.editing = true; return renderCalendarBody(); }
+      if (btn.dataset.calCanceledit) { CAL.editing = false; return renderCalendarBody(); }
+      if (btn.dataset.calSavenote) return saveDayNote();
+    });
+    m.addEventListener('change', (e) => {
+      const cb = e.target.closest('input[type=checkbox][data-cal-done]');
+      if (!cb || !CAL.selected) return;
+      if (BUSY) { cb.checked = !cb.checked; return; } // undo the browser's optimistic flip
+      setDoneOn(CAL.selected, cb.dataset.calDone, cb.checked);
+    });
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && m.classList.contains('on')) { e.stopPropagation(); closeNotes(); }
+      if (e.key === 'Escape' && m.classList.contains('on')) { e.stopPropagation(); closeCalendar(); }
     }, true);
     return m;
   }
 
-  function openNotes() {
-    if (!isMgr()) return;
+  function openCalendar() {
     const m = modal();
-    const todayDate = ymd(new Date());
-    m.querySelector('#tb-noteerr').textContent = '';
-    m.querySelector('#tb-noterows').innerHTML = week().map((d) => {
-      const n = NOTES[d.date];
-      return `<label class="tb-row ${d.date === todayDate ? 'tb-today' : ''}">
-        <span>${d.label} <small>${esc(d.display)}</small></span>
-        <textarea data-date="${d.date}" maxlength="500"
-          placeholder="note (optional)">${esc(n && n.text ? n.text : '')}</textarea></label>`;
-    }).join('');
+    const now = new Date();
+    CAL.year = now.getFullYear();
+    CAL.month = now.getMonth();
+    CAL.selected = ymd(now);
+    CAL.editing = false;
+    CAL.error = '';
     m.classList.add('on');
-    const t = m.querySelector(`textarea[data-date="${todayDate}"]`);
-    if (t) t.focus();
+    loadCalendarMonth();
   }
-  const closeNotes = () => { const m = document.getElementById('tb-modal'); if (m) m.classList.remove('on'); };
+  function closeCalendar() {
+    CAL.editing = false;
+    const m = document.getElementById('tb-modal');
+    if (m) m.classList.remove('on');
+  }
+  const calOpen = () => { const m = document.getElementById('tb-modal'); return !!(m && m.classList.contains('on')); };
 
-  async function saveNotes() {
-    const m = modal();
-    const err = m.querySelector('#tb-noteerr');
-    const btn = m.querySelector('#tb-notesave');
-    btn.disabled = true;
-    err.textContent = '';
+  function navMonth(delta) {
+    if (CAL.loading) return;
+    const d = new Date(CAL.year, CAL.month + delta, 1);
+    CAL.year = d.getFullYear();
+    CAL.month = d.getMonth();
+    CAL.selected = null; // the old selection may not fall inside the new grid's fetched range
+    loadCalendarMonth();
+  }
+  function jumpToday() {
+    if (CAL.loading) return;
+    const now = new Date();
+    CAL.year = now.getFullYear();
+    CAL.month = now.getMonth();
+    CAL.selected = ymd(now);
+    loadCalendarMonth();
+  }
+
+  async function loadCalendarMonth() {
+    const reqYear = CAL.year;
+    const reqMonth = CAL.month;
+    const grid = monthGrid(reqYear, reqMonth);
+    CAL.loading = true;
+    CAL.error = '';
+    renderCalendarBody(); // paint the new month's dates immediately; marks fill in once loaded
     try {
-      // Only days that actually changed get written, so saving doesn't restamp
-      // every note in the week with a new author and time.
-      for (const t of m.querySelectorAll('textarea[data-date]')) {
-        const date = t.dataset.date;
-        const was = (NOTES[date] && NOTES[date].text) || '';
-        const now = t.value.trim();
-        if (now === was) continue;
-        const res = await fetch(`/api/today/note/${date}`, {
-          method: 'PUT', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: now }),
-        });
-        const j = await res.json().catch(() => ({}));
-        if (!res.ok) { err.textContent = j.error || 'Could not save.'; return; }
-      }
-      closeNotes();
-      await refresh(true);
-    } finally { btn.disabled = false; }
+      const from = grid[0].date;
+      const to = grid[grid.length - 1].date;
+      const j = await (await fetch(`/api/today?date=${ymd(new Date())}&from=${from}&to=${to}`)).json();
+      if (reqYear !== CAL.year || reqMonth !== CAL.month) return; // superseded by a later nav
+      CAL.done = (j && j.doneRange) || {};
+      CAL.notes = (j && j.notes) || {};
+    } catch {
+      if (reqYear !== CAL.year || reqMonth !== CAL.month) return;
+      CAL.error = 'Could not load this month.';
+    } finally {
+      if (reqYear === CAL.year && reqMonth === CAL.month) { CAL.loading = false; renderCalendarBody(); }
+    }
+  }
+
+  function renderCalendarBody() {
+    const m = document.getElementById('tb-modal');
+    if (!m) return;
+    const grid = monthGrid(CAL.year, CAL.month);
+    const todayDate = ymd(new Date());
+    const mgr = isMgr();
+
+    m.querySelector('#tb-cal-title').textContent =
+      new Date(CAL.year, CAL.month, 1).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+    m.querySelector('#tb-cal-err').textContent = CAL.error;
+    m.querySelector('#tb-cal-prev').disabled = CAL.loading;
+    m.querySelector('#tb-cal-next').disabled = CAL.loading;
+
+    const dowHeader = DAYS.map(([, label]) => `<div class="tb-cal-dow">${label}</div>`).join('');
+    const cellHtml = grid.map((c) => {
+      const tasks = tasksForDay(c.dow);
+      const doneMap = CAL.done[c.date] || {};
+      const doneCount = tasks.filter((g) => doneMap[String(g.id)]).length;
+      const openCount = tasks.length - doneCount;
+      const hasNote = !!(CAL.notes[c.date] && CAL.notes[c.date].text);
+      const cls = ['tb-cal-cell',
+        !c.inMonth ? 'tb-cal-out' : '',
+        c.date === todayDate ? 'tb-today' : '',
+        c.date === CAL.selected ? 'tb-cal-selected' : ''].filter(Boolean).join(' ');
+      const marks = [
+        tasks.length && openCount > 0
+          ? `<span class="tb-cal-dot"></span><span class="tb-cal-count">${openCount}</span>` : '',
+        tasks.length && openCount === 0 ? '<span class="tb-cal-dot tb-cal-done"></span>' : '',
+        hasNote ? '<span class="tb-cal-dot tb-cal-note"></span>' : '',
+      ].join('');
+      return `<button type="button" class="${cls}" data-cal-day="${c.date}">
+        <span class="tb-cal-daynum">${c.day}</span><span class="tb-cal-marks">${marks}</span></button>`;
+    }).join('');
+    m.querySelector('#tb-cal-grid').innerHTML = dowHeader + cellHtml;
+
+    const detail = m.querySelector('#tb-cal-detail');
+    if (!CAL.selected) { detail.innerHTML = '<div class="tb-none">Pick a date to see its tasks.</div>'; return; }
+    const dow = dayKeyOf(CAL.selected);
+    const tasks = tasksForDay(dow);
+    const doneMap = CAL.done[CAL.selected] || {};
+    const note = CAL.notes[CAL.selected];
+    const label = fromYmd(CAL.selected).toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
+
+    detail.innerHTML = `
+      <h4>${esc(label)}</h4>
+      ${tasks.length ? `<ul class="tb-cal-tasklist">${tasks.map((g) => {
+        const mark = doneMap[String(g.id)];
+        return `<label>
+          <input type="checkbox" data-cal-done="${esc(g.id)}" ${mark ? 'checked' : ''}>
+          <span class="tb-g">${esc(g.name)}</span><span class="tb-arrow">→</span><span class="tb-n">${esc(g.plan[dow])}</span>
+          ${mark && mark.by ? `<span class="tb-meta">done by ${esc(mark.by)}${mark.at ? ` · ${esc(clock(mark.at))}` : ''}</span>` : ''}
+        </label>`;
+      }).join('')}</ul>` : '<div class="tb-none">No tasks scheduled for this date.</div>'}
+      <div class="tb-cal-note">
+        <span class="tb-cap">📌 Note</span>
+        ${CAL.editing ? `
+          <textarea id="tb-cal-notebox" maxlength="500"
+            placeholder="note (optional)">${esc(note && note.text ? note.text : '')}</textarea>
+          <div class="tb-cal-noteactions">
+            <button class="tb-cancel" data-cal-canceledit="1">Cancel</button>
+            <button class="tb-save" data-cal-savenote="1">Save</button>
+          </div>` : `
+          <span class="tb-notetext">${note && note.text ? esc(note.text) : '<span class="tb-none">No note for this date.</span>'}</span>
+          ${mgr ? '<button class="tb-link" data-cal-editnote="1">✎ edit</button>' : ''}`}
+      </div>`;
+  }
+
+  function selectDay(date) {
+    CAL.selected = date;
+    CAL.editing = false;
+    renderCalendarBody();
+  }
+
+  async function saveDayNote() {
+    const m = document.getElementById('tb-modal');
+    const box = m.querySelector('#tb-cal-notebox');
+    if (!box || !CAL.selected) return;
+    const date = CAL.selected;
+    const text = box.value.trim();
+    try {
+      const res = await fetch(`/api/today/note/${date}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) { CAL.error = j.error || 'Could not save.'; renderCalendarBody(); return; }
+      if (text) CAL.notes[date] = { text, by: ME.username, at: new Date().toISOString() };
+      else delete CAL.notes[date];
+      CAL.editing = false;
+      // Keep the top board's note in sync when the edited date is today.
+      if (date === ymd(new Date())) { NOTES[date] = CAL.notes[date]; render(); }
+      renderCalendarBody();
+    } catch {
+      CAL.error = 'Could not save.';
+      renderCalendarBody();
+    }
   }
 
   // Coalesced: the dashboard mounts the board and then refreshes it again from its
@@ -289,7 +524,10 @@
   function refresh(force) {
     const start = () => {
       const p = fetchState()
-        .then(render, () => {}) // a failed poll leaves what's on screen alone
+        // A failed poll leaves what's on screen alone. An open calendar also
+        // repaints, so an edit made elsewhere (e.g. a group's weekly plan
+        // changed in the dashboard's group editor) shows up live.
+        .then(() => { render(); if (calOpen()) renderCalendarBody(); }, () => {})
         .finally(() => { if (inFlight === p) inFlight = null; });
       inFlight = p;
       return p;
@@ -309,7 +547,8 @@
         const b = e.target.closest('button');
         if (!b) return;
         if (b.id === 'tb-toggledone') { SHOW_DONE = !SHOW_DONE; render(); return; }
-        if (b.id === 'tb-editnote' || b.id === 'tb-addnote') { openNotes(); return; }
+        if (b.id === 'tb-cal-open') { openCalendar(); return; }
+        if (b.id === 'tb-addnote') { openCalendar(); CAL.editing = true; renderCalendarBody(); return; }
         if (b.dataset.done) { setDone(b.dataset.done, true); return; }
         if (b.dataset.undo) { setDone(b.dataset.undo, false); return; }
         if (b.dataset.clear) { clearDay(b.dataset.clear); }

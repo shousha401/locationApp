@@ -106,6 +106,15 @@ function setDone(date, groupId, done, who) {
   return { date, groupId: gid, done: !!done, mark: done ? day[gid] : null };
 }
 
+// Every group's done-marks for a span of dates — the calendar's month view
+// needs this in one call rather than one round-trip per visible day.
+function doneRange(from, to) {
+  const out = {};
+  if (!isDate(from) || !isDate(to)) return out;
+  for (const [d, day] of Object.entries(state.done)) if (d >= from && d <= to) out[d] = day;
+  return out;
+}
+
 // ── The day's note ───────────────────────────────────────────────────────────
 const noteFor = (date) => (isDate(date) && state.notes[date]) || null;
 
@@ -134,4 +143,4 @@ function setNote(date, text, who) {
   return { date, ...rec };
 }
 
-module.exports = { isDate, todayLocal, doneFor, setDone, noteFor, notesRange, setNote, MAX_NOTE };
+module.exports = { isDate, todayLocal, doneFor, doneRange, setDone, noteFor, notesRange, setNote, MAX_NOTE };
