@@ -90,8 +90,6 @@
     .tb-next-row .tb-n { color:var(--accent2); }
     .tb-cap2 { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.08em;
       color:var(--muted); margin:13px 0 7px; }
-    .tb-oneoff { font-size:10px; font-weight:700; padding:2px 8px; border-radius:999px;
-      border:1px solid #5a4514; color:var(--warn); text-transform:uppercase; letter-spacing:.05em; }
     .tb-up { margin-top:13px; padding-top:4px; border-top:1px solid var(--line); }
     .tb-uprow { display:flex; gap:12px; align-items:baseline; padding:3px 0; font-size:14px;
       color:var(--muted); flex-wrap:wrap; }
@@ -259,7 +257,7 @@
         <div class="tb-uprow">
           <span class="tb-update">${i2 === 0 ? esc(label) : ''}</span>
           <span class="tb-g">${esc(t.g.name)}</span><span class="tb-arrow">→</span>
-          <span class="tb-upn">${esc(t.text)}</span>${t.oneOff ? '<span class="tb-oneoff">one-off</span>' : ''}
+          <span class="tb-upn">${esc(t.text)}</span>
         </div>`));
       if (note && note.text) rows.push(`
         <div class="tb-uprow">
@@ -300,7 +298,7 @@
 
     const taskBody = (t) => `
       <span class="tb-g">${esc(t.g.name)}</span><span class="tb-arrow">→</span>
-      <span class="tb-n">${esc(t.text)}</span>${t.oneOff ? '<span class="tb-oneoff">one-off</span>' : ''}`;
+      <span class="tb-n">${esc(t.text)}</span>`;
 
     EL.innerHTML = `<div class="tb">
       <div class="tb-head">
@@ -585,7 +583,6 @@
         return `<label>
           <input type="checkbox" data-cal-done="${esc(t.key)}" ${mark ? 'checked' : ''}>
           <span class="tb-g">${esc(t.g.name)}</span><span class="tb-arrow">→</span><span class="tb-n">${esc(t.text)}</span>
-          ${t.oneOff ? '<span class="tb-oneoff">one-off</span>' : ''}
           ${mark && mark.by ? `<span class="tb-meta">done by ${esc(mark.by)}${mark.at ? ` · ${esc(clock(mark.at))}` : ''}</span>` : ''}
         </label>`;
       }).join('')}</ul>` : '<div class="tb-none">No tasks scheduled for this date.</div>'}

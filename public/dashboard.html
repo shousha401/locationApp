@@ -166,29 +166,8 @@
     .cal-notecard:has(textarea:disabled) .cal-notelabel { color:var(--muted); font-weight:400; font-style:italic; }
     .cal-notecard textarea:disabled { cursor:default; }
 
-    /* The week strip: pick a day, then the one note box below shows/edits it.
-       Still one recurring note per WEEKDAY (group.plan) — this only changes how
-       you pick which day, not what a "day" means. */
-    .weekcal-grid { display:grid; grid-template-columns:repeat(7,1fr); gap:7px; }
-    .weekcal-cell { display:flex; flex-direction:column; align-items:center; gap:5px;
-      padding:10px 4px; border-radius:10px; border:1px solid var(--line); background:var(--panel2);
-      color:var(--text); cursor:pointer; font:inherit; transition:transform .12s, background-color .12s, border-color .12s; }
-    .weekcal-cell:hover { border-color:var(--accent); transform:translateY(-1px); }
-    .weekcal-cell.today:not(.selected) { border-color:var(--accent2); background:rgba(34,211,238,.08); }
-    .weekcal-cell.today:not(.selected) .wd { color:var(--accent2); }
-    .weekcal-cell.selected { border-color:var(--accent); background:var(--accent); color:#04222f;
-      box-shadow:0 3px 12px rgba(56,189,248,.35); }
-    .weekcal-cell .wd { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); }
-    .weekcal-cell.selected .wd { color:#04222f; opacity:.75; }
-    .weekcal-cell .wdate { font-size:10px; color:var(--muted); }
-    .weekcal-cell.selected .wdate { color:#04222f; opacity:.75; }
-    .weekcal-dot { width:6px; height:6px; border-radius:50%; background:var(--accent2); }
-    .weekcal-cell.selected .weekcal-dot { background:#04222f; }
-
-    /* One-off dates: a second, independent note per exact calendar date (not a
-       weekday) — for the thing that happens once, not every week. A real
-       month calendar so it can reach any future month, unlike the week strip
-       above which only ever shows the current Mon-Sun. */
+    /* Daily notes: one note per exact calendar date, picked on a real month
+       calendar so it can reach any future month. */
     .gcal-nav { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
     .gcal-nav h5 { margin:0; flex:1; font-size:14px; font-weight:700; text-align:center; }
     .gcal-grid { display:grid; grid-template-columns:repeat(7,1fr); gap:5px; }
@@ -255,15 +234,9 @@
   <div class="modal" id="gmodal"><div class="gsheet">
     <h3 id="gtitle">New group</h3>
     <input type="text" id="gname" placeholder="Group name — what the floor calls these" maxlength="60">
+    <div class="zones" id="gpicktabs" style="margin-bottom:9px"></div>
     <div class="picklist" id="gpick"></div>
-    <h4>Daily note <span>— pick a day below and add a short note. Leave a day blank if there's nothing.</span></h4>
-    <div class="weekcal-grid" id="gcalgrid"></div>
-    <div class="cal-notecard">
-      <div class="cal-notelabel" id="gcallabel"></div>
-      <textarea id="gcalnote" maxlength="200" placeholder="note (optional)"></textarea>
-    </div>
-
-    <h4>One-time dates <span>— optional. A note for one specific date that does NOT repeat.</span></h4>
+    <h4>Daily note <span>— pick the date on the calendar, write the note, and that's what the floor reads that day.</span></h4>
     <div class="gcal-nav">
       <button type="button" class="cal-navbtn" id="gdprev" title="Previous month">‹</button>
       <h5 id="gdtitle"></h5>
@@ -317,28 +290,11 @@
     }
     const chips = (states) => (states || []).map((s) => `<span class="chip ${esc(s)}">${esc(s)}</span>`).join('');
 
-    // ── The weekly plan ───────────────────────────────────────────────────────
-    // A group's standing instruction: which day it moves, and where to. Read on
-    // the floor, so "today" is the VIEWER's day — the person standing in front
-    // of the screen — not the server's. getDay() is 0=Sunday.
+    // DAYS heads the calendar grid; planOf only reads groups' LEGACY weekly
+    // plan (the editor no longer writes it — notes are per exact date now).
     const DAYS = [['mon', 'Mon'], ['tue', 'Tue'], ['wed', 'Wed'], ['thu', 'Thu'],
       ['fri', 'Fri'], ['sat', 'Sat'], ['sun', 'Sun']];
-    const DAY_FULL = { mon: 'Monday', tue: 'Tuesday', wed: 'Wednesday', thu: 'Thursday',
-      fri: 'Friday', sat: 'Saturday', sun: 'Sunday' };
-    const todayKey = () => ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'][new Date().getDay()];
     const planOf = (g) => (g && g.plan) || {};
-    // This week's dates (Monday-anchored) so each weekday row can show its date.
-    function weekDates() {
-      const now = new Date();
-      const monday = new Date(now);
-      monday.setDate(now.getDate() - ((now.getDay() + 6) % 7));
-      const out = {};
-      DAYS.forEach(([k], i) => {
-        const d = new Date(monday); d.setDate(monday.getDate() + i);
-        out[k] = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-      });
-      return out;
-    }
 
     function daysSince(dateStr) {
       if (!dateStr) return null;
@@ -370,48 +326,16 @@
     // made of are read on one screen. This file only keeps the editor.
     let EDIT_ID = null;
 
-    // The week strip's own editing buffer: still one note per WEEKDAY (the
-    // group's `plan`), just picked via a calendar-style row instead of seven
-    // always-visible inputs. Only the selected day's box is ever on screen, so
-    // the other six days' text has to live here between clicks.
-    let DAY_NOTES = {};
-    let SEL_DAY = 'mon';
-
-    function renderDayCal() {
-      const dates = weekDates();
-      const tk = todayKey();
-      $('gcalgrid').innerHTML = DAYS.map(([k, label]) => {
-        const has = !!(DAY_NOTES[k] && DAY_NOTES[k].trim());
-        const cls = ['weekcal-cell', k === tk ? 'today' : '', k === SEL_DAY ? 'selected' : '']
-          .filter(Boolean).join(' ');
-        return `<button type="button" class="${cls}" data-day="${k}">
-          <span class="wd">${label}</span><span class="wdate">${esc(dates[k])}</span>
-          ${has ? '<span class="weekcal-dot"></span>' : ''}
-        </button>`;
-      }).join('');
-      $('gcallabel').textContent = `${DAY_FULL[SEL_DAY]} note`;
-      $('gcalnote').value = DAY_NOTES[SEL_DAY] || '';
-    }
-    function selectDay(k) {
-      if (k === SEL_DAY) return;
-      SEL_DAY = k;
-      renderDayCal();
-      $('gcalnote').focus();
-    }
-    $('gcalgrid').addEventListener('click', (e) => {
-      const b = e.target.closest('[data-day]');
-      if (b) selectDay(b.dataset.day);
-    });
-    // Keep the buffer current as you type; the grid's dots catch up next time
-    // renderDayCal() runs (switching days or reopening) rather than on every key.
-    $('gcalnote').addEventListener('input', () => { DAY_NOTES[SEL_DAY] = $('gcalnote').value; });
-
-    // ── One-off dates ────────────────────────────────────────────────────────
-    // A second, independent note per exact calendar date — for the thing that
-    // happens once, not every week. Unlike the week strip above, this needs a
-    // real month calendar so it can reach any future month. Everything here is
-    // client-side: a group's whole `dates` map is already loaded via /api/groups
-    // in one shot, so there's no per-month fetch the way the Today board needs.
+    // ── Daily notes ──────────────────────────────────────────────────────────
+    // ONE note per exact calendar date (the group's `dates` map) — the only
+    // kind of note the editor writes now. The old weekly-repeating plan and its
+    // separate "one-time dates" section confused everyone, so the two collapsed
+    // into this single month calendar: pick the date, write the note, the floor
+    // reads it that day. Groups still carrying old weekly-plan notes get them
+    // materialized onto their next calendar occurrence in openEditor(), and
+    // Save clears the weekly field for good. Everything here is client-side: a
+    // group's whole `dates` map is already loaded via /api/groups in one shot,
+    // so there's no per-month fetch the way the Today board needs.
     const p2 = (n) => String(n).padStart(2, '0');
     const ymd = (d) => `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
     const fromYmd = (s) => { const [y, mo, d] = s.split('-').map(Number); return new Date(y, mo - 1, d); };
@@ -448,7 +372,7 @@
       }).join('');
       $('gdnote').disabled = !DCAL_SELECTED;
       if (!DCAL_SELECTED) {
-        $('gdlabel').textContent = 'Pick a date above to add a one-time note';
+        $('gdlabel').textContent = 'Pick a date on the calendar to write its note';
         $('gdnote').value = '';
         return;
       }
@@ -478,6 +402,75 @@
       if (DCAL_SELECTED) DATE_NOTES[DCAL_SELECTED] = $('gdnote').value;
     });
 
+    // The picker's source of truth. The DOM can't be it anymore: the picker now
+    // has two tabs (products / mixed pallets), and switching tabs rebuilds the
+    // checkboxes — ticks have to survive that.
+    let CHOSEN = new Set();
+    let PICK_TAB = 'products';
+
+    function renderPickTabs() {
+      const n = mixedPalletGroups(INV).length;
+      $('gpicktabs').innerHTML = `
+        <button type="button" class="zbtn ${PICK_TAB === 'products' ? 'on' : ''}" data-picktab="products">All products</button>
+        <button type="button" class="zbtn ${PICK_TAB === 'mixed' ? 'on' : ''}" data-picktab="mixed">⚠ Mixed pallets${n ? ` · ${fmtInt(n)}` : ''}</button>`;
+    }
+
+    function renderPick() {
+      renderPickTabs();
+      if (PICK_TAB === 'mixed') {
+        // One row per mixed pallet; ticking it takes every product on that
+        // pallet into the group in one go (groups are made of item codes, so
+        // "pick the pallet" means "pick everything riding on it").
+        const mixed = mixedPalletGroups(INV);
+        $('gpick').innerHTML = mixed.length ? mixed.map((mg) => {
+          const codes = [...new Set(mg.items.map((p) => p.item))];
+          const all = codes.every((c) => CHOSEN.has(c));
+          return `
+          <label class="pick"><input type="checkbox" data-pallet="${esc(mg.pallet)}" ${all ? 'checked' : ''}>
+            <span class="mono">${esc(mg.pallet)}</span>
+            <span class="desc">${codes.map((c) => `<span class="mono">${esc(c)}</span> ${esc(descOf(c))}`).join(' · ')}</span></label>`;
+        }).join('') : '<div class="pick"><span class="desc">No pallet currently carries more than one product.</span></div>';
+        return;
+      }
+      // Pick from every product in the snapshot; keep chosen codes that have
+      // rotated out of GT so editing a group never silently drops them.
+      const known = new Set((O.allProducts || []).map((p) => p.item));
+      const extras = [...CHOSEN].filter((c) => !known.has(c));
+      // Products that share a pallet with something else — flagged here so a
+      // manager building a group notices before picking, not after.
+      const mixedItems = new Set(mixedPalletGroups(INV).flatMap((mg) => mg.items.map((p) => p.item)));
+      $('gpick').innerHTML = (O.allProducts || []).map((p) => `
+        <label class="pick"><input type="checkbox" value="${esc(p.item)}" ${CHOSEN.has(p.item) ? 'checked' : ''}>
+          <span class="mono">${esc(p.item)}</span>
+          ${mixedItems.has(p.item) ? '<span class="mixflag" title="Shares a pallet with another product — see the ⚠ Mixed pallets tab">⚠</span>' : ''}
+          <span class="desc">${esc(p.description)}</span>
+          <span class="desc">${fmtInt(p.pallets)} plt</span></label>`).join('')
+        + extras.map((c) => `
+        <label class="pick"><input type="checkbox" value="${esc(c)}" checked>
+          <span class="mono">${esc(c)}</span><span class="desc">not in GT right now</span></label>`).join('');
+    }
+
+    $('gpicktabs').addEventListener('click', (e) => {
+      const b = e.target.closest('[data-picktab]');
+      if (!b || b.dataset.picktab === PICK_TAB) return;
+      PICK_TAB = b.dataset.picktab;
+      renderPick();
+    });
+    $('gpick').addEventListener('change', (e) => {
+      const cb = e.target.closest('input[type=checkbox]');
+      if (!cb) return;
+      if (cb.dataset.pallet) {
+        // A pallet row stands for all its products at once.
+        const mg = mixedPalletGroups(INV).find((x) => x.pallet === cb.dataset.pallet);
+        if (!mg) return;
+        for (const c of new Set(mg.items.map((p) => p.item))) {
+          if (cb.checked) CHOSEN.add(c); else CHOSEN.delete(c);
+        }
+      } else if (cb.value) {
+        if (cb.checked) CHOSEN.add(cb.value); else CHOSEN.delete(cb.value);
+      }
+    });
+
     function openEditor(id) {
       const g = id != null ? (O.groups || []).find((x) => x.id === id) : null;
       EDIT_ID = g ? g.id : null;
@@ -485,34 +478,27 @@
       $('gname').value = g ? g.name : '';
       $('gerrbox').textContent = '';
       $('gdel').classList.toggle('hidden', !g);
-      const chosen = new Set(g ? g.items : []);
-      // Pick from every product in the snapshot; keep chosen codes that have
-      // rotated out of GT so editing a group never silently drops them.
-      const known = new Set((O.allProducts || []).map((p) => p.item));
-      const extras = [...chosen].filter((c) => !known.has(c));
-      // Products that share a pallet with something else — flagged here so a
-      // manager building a group notices before picking, not after.
-      const mixedItems = new Set(mixedPalletGroups(INV).flatMap((mg) => mg.items.map((p) => p.item)));
-      $('gpick').innerHTML = (O.allProducts || []).map((p) => `
-        <label class="pick"><input type="checkbox" value="${esc(p.item)}" ${chosen.has(p.item) ? 'checked' : ''}>
-          <span class="mono">${esc(p.item)}</span>
-          ${mixedItems.has(p.item) ? '<span class="mixflag" title="Shares a pallet with another product — see the Mixed Pallets tab">⚠</span>' : ''}
-          <span class="desc">${esc(p.description)}</span>
-          <span class="desc">${fmtInt(p.pallets)} plt</span></label>`).join('')
-        + extras.map((c) => `
-        <label class="pick"><input type="checkbox" value="${esc(c)}" checked>
-          <span class="mono">${esc(c)}</span><span class="desc">not in GT right now</span></label>`).join('');
-      // A free-text NOTE per weekday (not a bin), picked via the week strip.
-      // Copied rather than aliased so editing here can't touch g.plan before Save.
-      DAY_NOTES = { ...planOf(g) };
-      SEL_DAY = todayKey();
-      renderDayCal();
-      // One-off dates: same copy-not-alias reasoning, keyed by exact date instead.
+      CHOSEN = new Set(g ? g.items : []);
+      PICK_TAB = 'products';
+      renderPick();
+      // Copied rather than aliased so editing here can't touch g.dates before Save.
       DATE_NOTES = { ...(g && g.dates) };
+      // Anything still on the retired weekly plan lands on its next calendar
+      // occurrence (today counts), where the manager can see and edit it before
+      // Save makes the conversion real. An existing dated note wins the day.
+      if (g && g.plan) {
+        const dowIdx = { sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6 };
+        for (const [k, text] of Object.entries(g.plan)) {
+          if (dowIdx[k] == null) continue;
+          const d = new Date();
+          d.setDate(d.getDate() + ((dowIdx[k] - d.getDay() + 7) % 7));
+          if (!DATE_NOTES[ymd(d)]) DATE_NOTES[ymd(d)] = text;
+        }
+      }
       const now = new Date();
       DCAL_YEAR = now.getFullYear();
       DCAL_MONTH = now.getMonth();
-      DCAL_SELECTED = null;
+      DCAL_SELECTED = ymd(now); // today pre-picked: writing today's note is one step
       renderDateCal();
       $('gmodal').classList.add('on');
     }
@@ -529,15 +515,15 @@
 
     $('gsave').addEventListener('click', async () => {
       const name = $('gname').value.trim();
-      const items = [...$('gpick').querySelectorAll('input:checked')].map((i) => i.value);
-      DAY_NOTES[SEL_DAY] = $('gcalnote').value.trim(); // capture whatever's in the box right now
-      const plan = { ...DAY_NOTES };
-      if (DCAL_SELECTED) DATE_NOTES[DCAL_SELECTED] = $('gdnote').value.trim();
+      const items = [...CHOSEN];
+      if (DCAL_SELECTED) DATE_NOTES[DCAL_SELECTED] = $('gdnote').value.trim(); // capture the open box
       const dates = { ...DATE_NOTES };
       const url = EDIT_ID != null ? '/api/groups/' + EDIT_ID : '/api/groups';
+      // plan is always sent EMPTY: the weekly-repeat field is retired, and any
+      // notes it still held were materialized into `dates` when the editor opened.
       const res = await fetch(url, {
         method: EDIT_ID != null ? 'PUT' : 'POST',
-        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, items, plan, dates }),
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, items, plan: {}, dates }),
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok) { $('gerrbox').textContent = j.error || 'Could not save.'; return; }
@@ -752,8 +738,8 @@
         // hiding stock that exists, and saying otherwise would be a lie.
         const here = new Set(products.map((p) => p.item));
         const missing = g.items.filter((c) => !here.has(c)).sort(cmpStr);
-        return Object.assign({ id: g.id, name: g.name, plan: planOf(g), total: g.items.length,
-          products, missing, filtered: filtering }, foldPallets(mine));
+        return Object.assign({ id: g.id, name: g.name, plan: planOf(g), dates: g.dates || {},
+          total: g.items.length, products, missing, filtered: filtering }, foldPallets(mine));
       }).filter((g) => !filtering || g.products.length)
         .sort((a, b) => cmpStr(a.name, b.name));
     }
@@ -952,9 +938,20 @@
           </tr>` + (!open ? '' : `
           <tr class="lsub" data-grpsub="${g.id}"><td colspan="7">
             ${(() => {
+              // The group's notes, repeated on its own line: upcoming dated
+              // notes, plus any legacy weekly-plan ones a resave hasn't
+              // migrated yet — someone reading All inventory shouldn't have to
+              // scroll up to the board to learn what's scheduled.
+              const today = ymd(new Date());
+              const up = Object.entries(g.dates || {}).filter(([d]) => d >= today)
+                .sort((a, b) => (a[0] < b[0] ? -1 : 1)).slice(0, 5);
               const wk = DAYS.filter(([k]) => g.plan && g.plan[k]);
-              return wk.length ? `<div class="weekplan">${wk.map(([k, label]) =>
-                `<span class="d">${label}</span> ${esc(g.plan[k])}`).join('   ·   ')}</div>` : '';
+              if (!up.length && !wk.length) return '';
+              const fmtD = (d) => fromYmd(d).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+              return `<div class="weekplan">${[
+                ...up.map(([d, t]) => `<span class="d">${esc(fmtD(d))}</span> ${esc(t)}`),
+                ...wk.map(([k, label]) => `<span class="d">every ${label}</span> ${esc(g.plan[k])}`),
+              ].join('   ·   ')}</div>`;
             })()}
             ${g.products.length ? `<table class="subtbl">
               <thead><tr><th>Item</th><th class="num">Pallets</th><th>Location</th><th>Oldest since</th>
