@@ -145,44 +145,65 @@
     .gsheet h4 { margin:16px 0 8px; font-size:11px; color:var(--muted);
       text-transform:uppercase; letter-spacing:.06em; }
     .gsheet h4 span { text-transform:none; letter-spacing:0; }
+    /* Both calendar widgets below share one visual language: a filled accent
+       "chip" for whatever's selected (so it reads instantly, not just a thin
+       border), a soft tint + ring for "today" so the two states never look
+       alike, a real card around the note box, and proper icon nav buttons
+       instead of borrowing the tiny inline .gedit pill. */
+    .cal-navbtn { width:28px; height:28px; flex-shrink:0; display:flex; align-items:center;
+      justify-content:center; border-radius:8px; border:1px solid var(--line); background:var(--panel2);
+      color:var(--muted); cursor:pointer; font-size:15px; line-height:1; padding:0; }
+    .cal-navbtn:hover { border-color:var(--accent); color:var(--accent); background:var(--bg); }
+    .cal-notecard { margin-top:12px; padding:12px 14px; border-radius:10px;
+      border:1px solid var(--line); background:var(--panel2); }
+    .cal-notecard .cal-notelabel { font-size:12px; font-weight:700; color:var(--accent2); margin-bottom:8px; }
+    .cal-notecard textarea { width:100%; min-height:64px; resize:vertical; padding:9px 11px;
+      font:inherit; font-size:13px; border-radius:8px; border:1px solid var(--line);
+      background:var(--bg); color:var(--text); }
+    .cal-notecard textarea:focus { outline:none; border-color:var(--accent); }
+    .cal-notecard:has(textarea:disabled) { opacity:.7; }
+    .cal-notecard:has(textarea:disabled) .cal-notelabel { color:var(--muted); font-weight:400; font-style:italic; }
+    .cal-notecard textarea:disabled { cursor:default; }
+
     /* The week strip: pick a day, then the one note box below shows/edits it.
        Still one recurring note per WEEKDAY (group.plan) — this only changes how
        you pick which day, not what a "day" means. */
-    .weekcal-grid { display:grid; grid-template-columns:repeat(7,1fr); gap:6px; }
-    .weekcal-cell { display:flex; flex-direction:column; align-items:center; gap:4px;
-      padding:8px 4px; border-radius:9px; border:1px solid var(--line); background:var(--panel2);
-      color:var(--text); cursor:pointer; font:inherit; }
-    .weekcal-cell:hover { border-color:var(--accent); }
-    .weekcal-cell.today { border-color:var(--accent2); }
-    .weekcal-cell.selected { border-color:var(--accent); box-shadow:inset 0 0 0 1px var(--accent); }
-    .weekcal-cell .wd { font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); }
-    .weekcal-cell.selected .wd { color:var(--text); }
+    .weekcal-grid { display:grid; grid-template-columns:repeat(7,1fr); gap:7px; }
+    .weekcal-cell { display:flex; flex-direction:column; align-items:center; gap:5px;
+      padding:10px 4px; border-radius:10px; border:1px solid var(--line); background:var(--panel2);
+      color:var(--text); cursor:pointer; font:inherit; transition:transform .12s, background-color .12s, border-color .12s; }
+    .weekcal-cell:hover { border-color:var(--accent); transform:translateY(-1px); }
+    .weekcal-cell.today:not(.selected) { border-color:var(--accent2); background:rgba(34,211,238,.08); }
+    .weekcal-cell.today:not(.selected) .wd { color:var(--accent2); }
+    .weekcal-cell.selected { border-color:var(--accent); background:var(--accent); color:#04222f;
+      box-shadow:0 3px 12px rgba(56,189,248,.35); }
+    .weekcal-cell .wd { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); }
+    .weekcal-cell.selected .wd { color:#04222f; opacity:.75; }
     .weekcal-cell .wdate { font-size:10px; color:var(--muted); }
+    .weekcal-cell.selected .wdate { color:#04222f; opacity:.75; }
     .weekcal-dot { width:6px; height:6px; border-radius:50%; background:var(--accent2); }
-    .weekcal-label { font-size:12px; color:var(--muted); margin:12px 0 6px; }
-    .weekcal-note textarea { width:100%; min-height:70px; resize:vertical; padding:8px 10px;
-      font:inherit; font-size:13px; border-radius:8px; border:1px solid var(--line);
-      background:var(--panel2); color:var(--text); }
-    .weekcal-note textarea:focus { outline:none; border-color:var(--accent); }
+    .weekcal-cell.selected .weekcal-dot { background:#04222f; }
 
     /* One-off dates: a second, independent note per exact calendar date (not a
        weekday) — for the thing that happens once, not every week. A real
        month calendar so it can reach any future month, unlike the week strip
        above which only ever shows the current Mon-Sun. */
-    .gcal-nav { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
-    .gcal-nav h5 { margin:0; font-size:13px; min-width:130px; text-align:center; font-weight:600; }
-    .gcal-grid { display:grid; grid-template-columns:repeat(7,1fr); gap:4px; }
-    .gcal-dow { font-size:9px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted);
-      text-align:center; padding-bottom:3px; }
-    .gcal-cell { display:flex; flex-direction:column; align-items:center; justify-content:flex-start;
-      gap:3px; min-height:36px; padding:4px 2px; border-radius:7px; border:1px solid var(--line);
-      background:var(--panel2); color:var(--text); cursor:pointer; font:inherit; font-size:12px; }
-    .gcal-cell:hover { border-color:var(--accent); }
-    .gcal-cell.out { opacity:.4; }
-    .gcal-cell.today { border-color:var(--accent2); }
-    .gcal-cell.selected { border-color:var(--accent); box-shadow:inset 0 0 0 1px var(--accent); }
+    .gcal-nav { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
+    .gcal-nav h5 { margin:0; flex:1; font-size:14px; font-weight:700; text-align:center; }
+    .gcal-grid { display:grid; grid-template-columns:repeat(7,1fr); gap:5px; }
+    .gcal-dow { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.05em;
+      color:var(--muted); text-align:center; padding-bottom:5px; }
+    .gcal-cell { display:flex; align-items:center; justify-content:center; gap:4px;
+      height:38px; border-radius:9px; border:1px solid var(--line);
+      background:var(--panel2); color:var(--text); cursor:pointer; font:inherit; font-size:13px;
+      font-weight:600; transition:transform .12s, background-color .12s, border-color .12s; }
+    .gcal-cell:hover { border-color:var(--accent); transform:translateY(-1px); }
+    .gcal-cell.out { opacity:.35; }
+    .gcal-cell.today:not(.selected) { border-color:var(--accent2); color:var(--accent2); background:rgba(34,211,238,.08); }
+    .gcal-cell.selected { border-color:var(--accent); background:var(--accent); color:#04222f;
+      box-shadow:0 3px 12px rgba(56,189,248,.35); }
     .gcal-dot { width:5px; height:5px; border-radius:50%; background:var(--accent2); }
-    .gcal-note { margin-top:10px; }
+    .gcal-cell.selected .gcal-dot { background:#04222f; }
   </style>
 </head>
 <body>
@@ -235,20 +256,20 @@
     <div class="picklist" id="gpick"></div>
     <h4>Daily note <span>— pick a day below and add a short note. Leave a day blank if there's nothing.</span></h4>
     <div class="weekcal-grid" id="gcalgrid"></div>
-    <div class="weekcal-note">
-      <div class="weekcal-label" id="gcallabel"></div>
+    <div class="cal-notecard">
+      <div class="cal-notelabel" id="gcallabel"></div>
       <textarea id="gcalnote" maxlength="200" placeholder="note (optional)"></textarea>
     </div>
 
     <h4>One-time dates <span>— optional. A note for one specific date that does NOT repeat.</span></h4>
     <div class="gcal-nav">
-      <button type="button" class="gedit" id="gdprev" title="Previous month">‹</button>
+      <button type="button" class="cal-navbtn" id="gdprev" title="Previous month">‹</button>
       <h5 id="gdtitle"></h5>
-      <button type="button" class="gedit" id="gdnext" title="Next month">›</button>
+      <button type="button" class="cal-navbtn" id="gdnext" title="Next month">›</button>
     </div>
     <div class="gcal-grid" id="gdgrid"></div>
-    <div class="gcal-note">
-      <div class="weekcal-label" id="gdlabel"></div>
+    <div class="cal-notecard">
+      <div class="cal-notelabel" id="gdlabel"></div>
       <textarea id="gdnote" maxlength="200" placeholder="note (optional)"></textarea>
     </div>
 
@@ -423,7 +444,12 @@
         return `<button type="button" class="${cls}" data-date="${c.date}">
           ${c.day}${has ? '<span class="gcal-dot"></span>' : ''}</button>`;
       }).join('');
-      if (!DCAL_SELECTED) { $('gdlabel').textContent = ''; $('gdnote').value = ''; return; }
+      $('gdnote').disabled = !DCAL_SELECTED;
+      if (!DCAL_SELECTED) {
+        $('gdlabel').textContent = 'Pick a date above to add a one-time note';
+        $('gdnote').value = '';
+        return;
+      }
       $('gdlabel').textContent =
         fromYmd(DCAL_SELECTED).toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
       $('gdnote').value = DATE_NOTES[DCAL_SELECTED] || '';
