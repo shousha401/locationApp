@@ -129,17 +129,26 @@
     .tb-sheet.tb-cal { width:min(96vw,640px); }
     .tb-cal-nav { display:flex; align-items:center; gap:8px; margin-bottom:4px; }
     .tb-cal-nav h3 { margin:0; font-size:15px; min-width:150px; text-align:center; }
-    .tb-cal-grid { display:grid; grid-template-columns:repeat(7,1fr); gap:4px; margin-top:10px; }
-    .tb-cal-dow { font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted);
-      text-align:center; padding-bottom:4px; }
+    .tb-cal-grid { display:grid; grid-template-columns:repeat(7,1fr); gap:5px; margin-top:10px; }
+    .tb-cal-dow { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.05em;
+      color:var(--muted); text-align:center; padding-bottom:4px; }
+    /* Same language as the group editor's calendars: a filled accent chip for
+       "selected" (not just a border, which read almost the same as "today"),
+       and a distinct teal tint for "today" so the two states never look alike. */
     .tb-cal-cell { display:flex; flex-direction:column; align-items:center; justify-content:flex-start;
-      gap:3px; min-height:46px; padding:5px 2px; border-radius:8px; border:1px solid var(--line);
-      background:var(--panel2); color:var(--text); cursor:pointer; font:inherit; }
-    .tb-cal-cell:hover { border-color:var(--accent); }
-    .tb-cal-cell.tb-cal-out { opacity:.4; }
-    .tb-cal-cell.tb-today { border-color:var(--accent2); }
-    .tb-cal-cell.tb-cal-selected { border-color:var(--accent); box-shadow:inset 0 0 0 1px var(--accent); }
-    .tb-cal-daynum { font-size:13px; font-weight:600; }
+      gap:3px; min-height:46px; padding:5px 2px; border-radius:9px; border:1px solid var(--line);
+      background:var(--panel2); color:var(--text); cursor:pointer; font:inherit;
+      transition:transform .12s, background-color .12s, border-color .12s; }
+    .tb-cal-cell:hover { border-color:var(--accent); transform:translateY(-1px); }
+    .tb-cal-cell.tb-cal-out { opacity:.35; }
+    .tb-cal-cell.tb-today:not(.tb-cal-selected) { border-color:var(--accent2); background:rgba(34,211,238,.08); }
+    .tb-cal-cell.tb-today:not(.tb-cal-selected) .tb-cal-daynum { color:var(--accent2); }
+    .tb-cal-cell.tb-cal-selected { border-color:var(--accent); background:var(--accent);
+      box-shadow:0 3px 12px rgba(56,189,248,.35); }
+    .tb-cal-cell.tb-cal-selected .tb-cal-daynum,
+    .tb-cal-cell.tb-cal-selected .tb-cal-count { color:#04222f; }
+    .tb-cal-cell.tb-cal-selected .tb-cal-dot:not(.tb-cal-done):not(.tb-cal-note) { background:#04222f; }
+    .tb-cal-daynum { font-size:13px; font-weight:700; }
     .tb-cal-marks { display:flex; align-items:center; gap:3px; min-height:8px; }
     .tb-cal-dot { width:6px; height:6px; border-radius:50%; background:var(--accent2); }
     .tb-cal-dot.tb-cal-done { background:var(--good); }
@@ -149,10 +158,18 @@
     .tb-cal-detail h4 { margin:0 0 8px; font-size:13px; }
     .tb-cal-tasklist { margin:0 0 12px; padding:0; list-style:none; display:flex; flex-direction:column; gap:7px; }
     .tb-cal-tasklist label { display:flex; align-items:center; gap:9px; font-size:15px; flex-wrap:wrap; }
-    .tb-cal-note textarea { width:100%; min-height:70px; margin-top:8px; resize:vertical; padding:8px 10px;
+    /* Named -notecard, not -note: "tb-cal-note" is already taken by the dot
+       marker for "this date has a note" (see .tb-cal-dot.tb-cal-note above) —
+       reusing it for this wrapper too would make the two impossible to
+       tell apart by class name alone. */
+    .tb-cal-notecard { margin-top:12px; padding:12px 14px; border-radius:10px;
+      border:1px solid var(--line); background:var(--panel2); }
+    .tb-cal-notecard .tb-cap { display:block; font-size:12px; font-weight:700; color:var(--accent2);
+      text-transform:none; letter-spacing:0; margin:0 0 6px; }
+    .tb-cal-notecard textarea { width:100%; min-height:70px; margin-top:8px; resize:vertical; padding:9px 11px;
       font:inherit; font-size:13px; border-radius:8px; border:1px solid var(--line);
-      background:var(--panel2); color:var(--text); }
-    .tb-cal-note textarea:focus { outline:none; border-color:var(--accent); }
+      background:var(--bg); color:var(--text); }
+    .tb-cal-notecard textarea:focus { outline:none; border-color:var(--accent); }
     .tb-cal-noteactions { display:flex; gap:8px; margin-top:8px; justify-content:flex-end; }
   `;
 
@@ -472,7 +489,7 @@
           ${mark && mark.by ? `<span class="tb-meta">done by ${esc(mark.by)}${mark.at ? ` · ${esc(clock(mark.at))}` : ''}</span>` : ''}
         </label>`;
       }).join('')}</ul>` : '<div class="tb-none">No tasks scheduled for this date.</div>'}
-      <div class="tb-cal-note">
+      <div class="tb-cal-notecard">
         <span class="tb-cap">📌 Note</span>
         ${CAL.editing ? `
           <textarea id="tb-cal-notebox" maxlength="500"
