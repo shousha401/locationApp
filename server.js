@@ -47,6 +47,10 @@ app.get('/api/location/:code', (req, res) => {
 });
 
 // Notes: any logged-in user may read; editors and admins may write.
+// The bare /api/notes lists EVERY location note, so the landing page can show
+// the floor everything that's written without them searching location by
+// location — viewers' whole job is reading these.
+app.get('/api/notes', (_req, res) => res.json({ notes: notes.all() }));
 app.get('/api/notes/:code', (req, res) => res.json(notes.get(req.params.code)));
 app.put('/api/notes/:code', auth.requireEditor, (req, res) => {
   res.json(notes.set(req.params.code, req.body || {}, req.user.username));

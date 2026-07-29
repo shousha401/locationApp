@@ -95,6 +95,27 @@
        today.js, which brings its own styles and renders the same on both pages. */
     .today { margin-bottom:16px; }
 
+    /* ── All location notes, listed up front ─────────────────────────────────
+       The floor reads notes; they shouldn't have to know which location to
+       search to find out a note exists. Rows are tappable and jump straight
+       to that location's feed below. */
+    .allnotes { margin-bottom:20px; }
+    .an-row { display:flex; gap:14px; padding:11px 16px; border-bottom:1px solid rgba(51,65,85,.5);
+      cursor:pointer; align-items:flex-start; flex-wrap:wrap; }
+    .an-row:last-child { border-bottom:0; }
+    .an-row:hover { background:rgba(56,189,248,.06); }
+    .an-loc { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:15px; font-weight:700;
+      color:var(--accent); white-space:nowrap; min-width:150px; }
+    .an-body { flex:1 1 260px; min-width:200px; }
+    .an-text { font-size:14px; white-space:pre-wrap; }
+    .an-meta { font-size:11px; color:var(--muted); margin-top:3px; }
+    .an-flags { display:flex; gap:5px; flex-wrap:wrap; align-items:center; }
+    .an-flag { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; font-weight:700;
+      background:var(--chip); border:1px solid var(--line); white-space:nowrap; }
+    .an-flag.reserved { color:var(--accent); border-color:#14415a; }
+    .an-flag.damaged, .an-flag.do_not_ship { color:var(--err); border-color:#5a1414; }
+    .an-flag.needs_recount { color:var(--warn); border-color:#5a4514; }
+
     /* ── Pallet cards ─────────────────────────────────────────────────────── */
     .pallet { border:1px solid var(--line); border-radius:11px; margin:16px; overflow:hidden; background:var(--panel2); }
     .phead { padding:13px 15px; border-bottom:1px solid var(--line); display:flex; gap:16px; align-items:flex-start; flex-wrap:wrap; }
@@ -159,6 +180,14 @@
 
   <div class="wrap">
     <div id="todayBoard" class="today hidden"></div>
+
+    <!-- Every location note in one place, right under the tasks: the floor's job
+         is to read what was written for them, not to know which bins to search. -->
+    <div class="card allnotes" id="allNotesCard">
+      <h2>📝 Location notes <span class="meta" id="allNotesCount"></span></h2>
+      <div id="allNotes"><div class="empty" style="padding:18px 16px">Loading notes…</div></div>
+    </div>
+
     <div class="search">
       <input id="loc" list="locs" placeholder="Type a GT location — e.g. GT.2.Z2.C03" autocomplete="off" spellcheck="false">
       <datalist id="locs"></datalist>
@@ -453,6 +482,44 @@
         ${cards}`;
     }
 
+    // ── All location notes, shown on arrival ──────────────────────────────────
+    // Sorted newest-first so what a manager just wrote is the first thing the
+    // next person to sign in reads. Tapping a row opens that location below.
+    async function loadAllNotes() {
+      try {
+        const r = await (await fetch('/api/notes')).json();
+        renderAllNotes(r.notes || []);
+      } catch (_) { /* leave whatever is on screen */ }
+    }
+
+    function renderAllNotes(list) {
+      const box = $('allNotes');
+      list.sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
+      $('allNotesCount').textContent = list.length ? `${list.length} location${list.length === 1 ? '' : 's'}` : '';
+      if (!list.length) {
+        box.innerHTML = '<div class="empty" style="padding:18px 16px">No location notes right now.</div>';
+        return;
+      }
+      box.innerHTML = list.map((n) => `
+        <div class="an-row" data-loc="${esc(n.code)}" title="Open ${esc(n.code)}">
+          <span class="an-loc">${esc(n.code)}</span>
+          <div class="an-body">
+            ${n.note ? `<div class="an-text">${esc(n.note)}</div>` : ''}
+            <div class="an-flags">${Object.keys(FLAG_LABELS).filter((k) => n.flags && n.flags[k])
+              .map((k) => `<span class="an-flag ${k}">${FLAG_LABELS[k]}</span>`).join('')}</div>
+            <div class="an-meta">${n.updatedBy ? `${esc(n.updatedBy)} · ` : ''}${n.updatedAt ? new Date(n.updatedAt).toLocaleString() : ''}</div>
+          </div>
+        </div>`).join('');
+    }
+
+    $('allNotes').addEventListener('click', (e) => {
+      const row = e.target.closest('.an-row');
+      if (!row || !row.dataset.loc) return;
+      $('loc').value = row.dataset.loc;
+      loadLocation(row.dataset.loc);
+      $('feedCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+
     // ── Notes & flags ──────────────────────────────────────────────────────────
     function renderNotes(code, note) {
       $('notesCard').classList.remove('hidden');
@@ -506,6 +573,7 @@
         if (!res.ok) throw new Error();
         const saved = await res.json();
         renderNotes(code, saved);
+        loadAllNotes(); // the up-front list must reflect the edit immediately
       } catch (_) {
         btn.disabled = false; btn.textContent = 'Save';
         $('banner').innerHTML = '<div class="banner err">Could not save notes (are you still signed in as an editor?).</div>';
@@ -530,6 +598,7 @@
       // Today's tasks + the day's note, shown up top so whoever signs in reads
       // what has to happen today before doing anything else.
       TodayBoard.mount({ el: $('todayBoard'), me: ME });
+      loadAllNotes();
       await refreshStatus();
       updateSuggestions('');
 
@@ -542,6 +611,7 @@
       setInterval(refreshStatus, 15000);
       setInterval(() => { if (CURRENT && !DIRTY) loadLocation(CURRENT, true); }, 30000);
       setInterval(() => TodayBoard.refresh(), 120000);
+      setInterval(loadAllNotes, 60000);
     }
     init();
   </script>
