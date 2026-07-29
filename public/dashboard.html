@@ -145,18 +145,25 @@
     .gsheet h4 { margin:16px 0 8px; font-size:11px; color:var(--muted);
       text-transform:uppercase; letter-spacing:.06em; }
     .gsheet h4 span { text-transform:none; letter-spacing:0; }
-    .days { border:1px solid var(--line); border-radius:9px; overflow:hidden; }
-    .dayrow { display:flex; align-items:center; gap:11px; padding:5px 11px;
-      border-bottom:1px solid rgba(51,65,85,.45); }
-    .dayrow:last-child { border-bottom:0; }
-    .dayrow > span { width:96px; flex-shrink:0; font-size:12px; color:var(--muted);
-      text-transform:uppercase; letter-spacing:.05em; }
-    .dayrow > span small { font-size:10px; letter-spacing:0; text-transform:none; opacity:.7; margin-left:4px; }
-    /* Beats .gsheet input[type=text] on order, same specificity — these sit in
-       a row, so they must not take the full width or the 12px bottom margin. */
-    .gsheet .dayrow input[type=text] { flex:1; width:auto; margin:0; padding:7px 10px; font-size:13px; }
-    .dayrow.today { background:rgba(34,211,238,.07); }
-    .dayrow.today > span { color:var(--accent2); font-weight:700; }
+    /* The week strip: pick a day, then the one note box below shows/edits it.
+       Still one recurring note per WEEKDAY (group.plan) — this only changes how
+       you pick which day, not what a "day" means. */
+    .weekcal-grid { display:grid; grid-template-columns:repeat(7,1fr); gap:6px; }
+    .weekcal-cell { display:flex; flex-direction:column; align-items:center; gap:4px;
+      padding:8px 4px; border-radius:9px; border:1px solid var(--line); background:var(--panel2);
+      color:var(--text); cursor:pointer; font:inherit; }
+    .weekcal-cell:hover { border-color:var(--accent); }
+    .weekcal-cell.today { border-color:var(--accent2); }
+    .weekcal-cell.selected { border-color:var(--accent); box-shadow:inset 0 0 0 1px var(--accent); }
+    .weekcal-cell .wd { font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); }
+    .weekcal-cell.selected .wd { color:var(--text); }
+    .weekcal-cell .wdate { font-size:10px; color:var(--muted); }
+    .weekcal-dot { width:6px; height:6px; border-radius:50%; background:var(--accent2); }
+    .weekcal-label { font-size:12px; color:var(--muted); margin:12px 0 6px; }
+    .weekcal-note textarea { width:100%; min-height:70px; resize:vertical; padding:8px 10px;
+      font:inherit; font-size:13px; border-radius:8px; border:1px solid var(--line);
+      background:var(--panel2); color:var(--text); }
+    .weekcal-note textarea:focus { outline:none; border-color:var(--accent); }
   </style>
 </head>
 <body>
@@ -207,8 +214,12 @@
     <h3 id="gtitle">New group</h3>
     <input type="text" id="gname" placeholder="Group name — what the floor calls these" maxlength="60">
     <div class="picklist" id="gpick"></div>
-    <h4>Daily note <span>— a short note for each day this week. Leave a day blank if there's nothing.</span></h4>
-    <div class="days" id="gdays"></div>
+    <h4>Daily note <span>— pick a day below and add a short note. Leave a day blank if there's nothing.</span></h4>
+    <div class="weekcal-grid" id="gcalgrid"></div>
+    <div class="weekcal-note">
+      <div class="weekcal-label" id="gcallabel"></div>
+      <textarea id="gcalnote" maxlength="200" placeholder="note (optional)"></textarea>
+    </div>
     <div class="gerr" id="gerrbox"></div>
     <div class="gactions">
       <button class="gdelete hidden" id="gdel">Delete group</button>
@@ -303,6 +314,43 @@
     // inventory (see renderInventory), so a named family and the products it is
     // made of are read on one screen. This file only keeps the editor.
     let EDIT_ID = null;
+
+    // The week strip's own editing buffer: still one note per WEEKDAY (the
+    // group's `plan`), just picked via a calendar-style row instead of seven
+    // always-visible inputs. Only the selected day's box is ever on screen, so
+    // the other six days' text has to live here between clicks.
+    let DAY_NOTES = {};
+    let SEL_DAY = 'mon';
+
+    function renderDayCal() {
+      const dates = weekDates();
+      const tk = todayKey();
+      $('gcalgrid').innerHTML = DAYS.map(([k, label]) => {
+        const has = !!(DAY_NOTES[k] && DAY_NOTES[k].trim());
+        const cls = ['weekcal-cell', k === tk ? 'today' : '', k === SEL_DAY ? 'selected' : '']
+          .filter(Boolean).join(' ');
+        return `<button type="button" class="${cls}" data-day="${k}">
+          <span class="wd">${label}</span><span class="wdate">${esc(dates[k])}</span>
+          ${has ? '<span class="weekcal-dot"></span>' : ''}
+        </button>`;
+      }).join('');
+      $('gcallabel').textContent = `${DAY_FULL[SEL_DAY]} note`;
+      $('gcalnote').value = DAY_NOTES[SEL_DAY] || '';
+    }
+    function selectDay(k) {
+      if (k === SEL_DAY) return;
+      SEL_DAY = k;
+      renderDayCal();
+      $('gcalnote').focus();
+    }
+    $('gcalgrid').addEventListener('click', (e) => {
+      const b = e.target.closest('[data-day]');
+      if (b) selectDay(b.dataset.day);
+    });
+    // Keep the buffer current as you type; the grid's dots catch up next time
+    // renderDayCal() runs (switching days or reopening) rather than on every key.
+    $('gcalnote').addEventListener('input', () => { DAY_NOTES[SEL_DAY] = $('gcalnote').value; });
+
     function openEditor(id) {
       const g = id != null ? (O.groups || []).find((x) => x.id === id) : null;
       EDIT_ID = g ? g.id : null;
@@ -322,15 +370,11 @@
         + extras.map((c) => `
         <label class="pick"><input type="checkbox" value="${esc(c)}" checked>
           <span class="mono">${esc(c)}</span><span class="desc">not in GT right now</span></label>`).join('');
-      // Weekday rows: a free-text NOTE per day (not a bin), with this week's date
-      // beside each label. Stored in the group's `plan`.
-      const plan = planOf(g);
-      const dates = weekDates();
-      const tk = todayKey();
-      $('gdays').innerHTML = DAYS.map(([k, label]) => `
-        <label class="dayrow ${k === tk ? 'today' : ''}"><span>${label} <small>${esc(dates[k])}</small></span>
-          <input type="text" data-day="${k}" maxlength="200"
-            value="${esc(plan[k] || '')}" placeholder="note (optional)"></label>`).join('');
+      // A free-text NOTE per weekday (not a bin), picked via the week strip.
+      // Copied rather than aliased so editing here can't touch g.plan before Save.
+      DAY_NOTES = { ...planOf(g) };
+      SEL_DAY = todayKey();
+      renderDayCal();
       $('gmodal').classList.add('on');
     }
     const closeEditor = () => $('gmodal').classList.remove('on');
@@ -347,8 +391,8 @@
     $('gsave').addEventListener('click', async () => {
       const name = $('gname').value.trim();
       const items = [...$('gpick').querySelectorAll('input:checked')].map((i) => i.value);
-      const plan = {};
-      for (const i of $('gdays').querySelectorAll('input[data-day]')) plan[i.dataset.day] = i.value.trim();
+      DAY_NOTES[SEL_DAY] = $('gcalnote').value.trim(); // capture whatever's in the box right now
+      const plan = { ...DAY_NOTES };
       const url = EDIT_ID != null ? '/api/groups/' + EDIT_ID : '/api/groups';
       const res = await fetch(url, {
         method: EDIT_ID != null ? 'PUT' : 'POST',
