@@ -33,18 +33,10 @@
     const d = new Date(iso);
     return isNaN(d) ? '' : d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
   };
-  // This week, Monday-anchored — the same week the group editor shows, so the
-  // two note editors never disagree about which Friday they mean.
-  function week() {
-    const now = new Date();
-    const monday = new Date(now);
-    monday.setDate(now.getDate() - ((now.getDay() + 6) % 7));
-    return DAYS.map(([key, label], i) => {
-      const d = new Date(monday);
-      d.setDate(monday.getDate() + i);
-      return { key, label, date: ymd(d), display: d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) };
-    });
-  }
+  // How many days past today the "coming up" list looks. Six, not seven: a full
+  // week ahead lands on today's own weekday again, so the weekly plan's tasks
+  // would show twice — once big as today's, once dimmed as "next Wednesday's".
+  const HORIZON = 6;
 
   // Parse a YYYY-MM-DD string as a LOCAL date, never via `new Date(str)` — that
   // parses as UTC and can silently shift a day in any timezone behind UTC,
@@ -89,6 +81,25 @@
     .tb-btn:hover { border-color:var(--accent); color:var(--accent); }
     .tb-btn.tb-x:hover { border-color:var(--err); color:var(--err); }
     .tb-btn[disabled] { opacity:.5; cursor:default; }
+    /* Airport-board rows: the UP NEXT task big and bright, later days dim. */
+    .tb-next { margin:2px 0 4px; padding:13px 16px; border-radius:10px;
+      background:rgba(34,211,238,.07); border:1px solid rgba(34,211,238,.45); }
+    .tb-next-cap { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.1em;
+      color:var(--accent2); margin-bottom:7px; }
+    .tb-next-row { display:flex; align-items:center; gap:11px; flex-wrap:wrap; font-size:23px; }
+    .tb-next-row .tb-n { color:var(--accent2); }
+    .tb-cap2 { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.08em;
+      color:var(--muted); margin:13px 0 7px; }
+    .tb-oneoff { font-size:10px; font-weight:700; padding:2px 8px; border-radius:999px;
+      border:1px solid #5a4514; color:var(--warn); text-transform:uppercase; letter-spacing:.05em; }
+    .tb-up { margin-top:13px; padding-top:4px; border-top:1px solid var(--line); }
+    .tb-uprow { display:flex; gap:12px; align-items:baseline; padding:3px 0; font-size:14px;
+      color:var(--muted); flex-wrap:wrap; }
+    .tb-uprow .tb-g { color:var(--text); font-weight:600; }
+    .tb-upn { color:var(--muted); }
+    .tb-update { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11px;
+      font-weight:700; color:var(--accent2); flex:0 0 96px; text-transform:uppercase; letter-spacing:.04em; }
+    .tb-upnote { font-size:13px; font-style:italic; }
     .tb-donebar { margin-top:11px; }
     .tb-link { background:none; border:0; padding:0; color:var(--muted); cursor:pointer;
       font-size:12px; text-decoration:underline; }
@@ -176,16 +187,29 @@
   let EL = null;              // where the board renders
   let ME = { username: '', role: 'viewer' };
   let GROUPS = [];
-  let DONE = {};              // groupId -> { by, at } for today
-  let NOTES = {};             // date -> { text, by, at } for this week
+  let DONE = {};              // task key -> { by, at } for today
+  let RANGE = {};             // date -> { key: {by,at} } for today..today+HORIZON
+  let NOTES = {};             // date -> { text, by, at } for today..today+HORIZON
   let SHOW_DONE = false;      // is the "N done today" list expanded
   let BUSY = false;           // a tick/clear is in flight — don't double-fire
   const isMgr = () => ME.role === 'editor' || ME.role === 'admin';
 
-  // Which groups have a task on a given weekday — shared by today's list and
-  // the month calendar so "what's scheduled" is resolved exactly one way.
-  const tasksForDay = (dow) => GROUPS.filter((g) => g.plan && g.plan[dow])
-    .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  // Every task on a given DATE — the weekly plan's note for that weekday plus
+  // any one-off note pinned to that exact date. Shared by today's list, the
+  // "coming up" list and the month calendar so "what's scheduled" is resolved
+  // exactly one way. Each task carries its own done-tick `key`: the plain group
+  // id for weekly tasks (matches every tick already stored), and a `d:`-prefixed
+  // id for one-offs so ticking one never hides the other on the same day.
+  function tasksOnDate(dateStr) {
+    const dow = dayKeyOf(dateStr);
+    const out = [];
+    for (const g of GROUPS) {
+      if (g.plan && g.plan[dow]) out.push({ g, key: String(g.id), text: g.plan[dow], oneOff: false });
+      if (g.dates && g.dates[dateStr]) out.push({ g, key: 'd:' + g.id, text: g.dates[dateStr], oneOff: true });
+    }
+    return out.sort((a, b) => String(a.g.name).localeCompare(String(b.g.name))
+      || (a.oneOff ? 1 : 0) - (b.oneOff ? 1 : 0));
+  }
 
   // The month calendar's own state — separate from DONE/NOTES (which back the
   // always-visible, frequently-polled single-day view) so opening/navigating
@@ -202,15 +226,50 @@
   }
 
   async function fetchState() {
-    const w = week();
     const date = ymd(new Date());
+    const end = new Date();
+    end.setDate(end.getDate() + HORIZON);
     const [g, t] = await Promise.all([
       fetch('/api/groups').then((r) => r.json()),
-      fetch(`/api/today?date=${date}&from=${w[0].date}&to=${w[6].date}`).then((r) => r.json()),
+      fetch(`/api/today?date=${date}&from=${date}&to=${ymd(end)}`).then((r) => r.json()),
     ]);
     GROUPS = (g && g.groups) || [];
     DONE = (t && t.done) || {};
+    RANGE = (t && t.doneRange) || {};
     NOTES = (t && t.notes) || {};
+  }
+
+  // The "coming up" strip under today — the next HORIZON days that actually
+  // have something on them, airport-departures style: date on the left, task
+  // on the right, dimmer than today because nobody acts on Friday's row on a
+  // Wednesday. Pre-ticked tasks (via the calendar) stay out of it.
+  function comingUpHtml() {
+    const d = new Date();
+    const days = [];
+    for (let i = 1; i <= HORIZON; i++) {
+      d.setDate(d.getDate() + 1);
+      const date = ymd(d);
+      const doneMap = RANGE[date] || {};
+      const tasks = tasksOnDate(date).filter((t) => !doneMap[t.key]);
+      const note = NOTES[date];
+      if (!tasks.length && !(note && note.text)) continue;
+      const label = d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+      const rows = [];
+      tasks.forEach((t, i2) => rows.push(`
+        <div class="tb-uprow">
+          <span class="tb-update">${i2 === 0 ? esc(label) : ''}</span>
+          <span class="tb-g">${esc(t.g.name)}</span><span class="tb-arrow">→</span>
+          <span class="tb-upn">${esc(t.text)}</span>${t.oneOff ? '<span class="tb-oneoff">one-off</span>' : ''}
+        </div>`));
+      if (note && note.text) rows.push(`
+        <div class="tb-uprow">
+          <span class="tb-update">${tasks.length ? '' : esc(label)}</span>
+          <span class="tb-upnote">📌 ${esc(note.text)}</span>
+        </div>`);
+      days.push(rows.join(''));
+    }
+    if (!days.length) return '';
+    return `<div class="tb-up"><div class="tb-cap2">Coming up</div>${days.join('')}</div>`;
   }
 
   function render() {
@@ -219,21 +278,29 @@
     const k = dayKey(now);
     const date = ymd(now);
     const dateStr = now.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
-    const all = tasksForDay(k);
+    const all = tasksOnDate(date);
     // Checked off means gone from the list — that is the whole point of the tick.
-    const open = all.filter((g) => !DONE[String(g.id)]);
-    const done = all.filter((g) => DONE[String(g.id)]);
+    const open = all.filter((t) => !DONE[t.key]);
+    const done = all.filter((t) => DONE[t.key]);
     const note = NOTES[date];
     const mgr = isMgr();
 
-    const taskLi = (g) => `
-      <li data-gid="${esc(g.id)}">
-        <span class="tb-g">${esc(g.name)}</span><span class="tb-arrow">→</span>
-        <span class="tb-n">${esc(g.plan[k])}</span>
-        <button class="tb-btn tb-done" data-done="${esc(g.id)}" title="Check this off for today">✓ done</button>
-        ${mgr ? `<button class="tb-btn tb-x" data-clear="${esc(g.id)}"
-          title="Delete this note from ${esc(k.toUpperCase())} — it won't come back next week">✕</button>` : ''}
-      </li>`;
+    // Airport-board split: the first open task is the big UP NEXT row, the rest
+    // of today queues under it, and later days dim below (comingUpHtml).
+    const next = open[0] || null;
+    const rest = open.slice(1);
+
+    const btns = (t) => `
+      <button class="tb-btn tb-done" data-done="${esc(t.key)}" title="Check this off for today">✓ done</button>
+      ${mgr ? (t.oneOff
+        ? `<button class="tb-btn tb-x" data-clearoneoff="${esc(t.g.id)}"
+            title="Delete this one-off note from ${esc(date)} for good">✕</button>`
+        : `<button class="tb-btn tb-x" data-clear="${esc(t.g.id)}"
+            title="Delete this note from ${esc(k.toUpperCase())} — it won't come back next week">✕</button>`) : ''}`;
+
+    const taskBody = (t) => `
+      <span class="tb-g">${esc(t.g.name)}</span><span class="tb-arrow">→</span>
+      <span class="tb-n">${esc(t.text)}</span>${t.oneOff ? '<span class="tb-oneoff">one-off</span>' : ''}`;
 
     EL.innerHTML = `<div class="tb">
       <div class="tb-head">
@@ -241,23 +308,29 @@
         <div class="tb-grow"></div>
         <button class="tb-btn" id="tb-cal-open">📅 Month</button>
       </div>
-      ${open.length ? `<ul class="tb-list">${open.map(taskLi).join('')}</ul>`
-        : `<div class="tb-none">${done.length ? 'Everything for today is checked off.'
+      ${next ? `
+        <div class="tb-next">
+          <div class="tb-next-cap">▸ Up next</div>
+          <div class="tb-next-row">${taskBody(next)}${btns(next)}</div>
+        </div>` : `<div class="tb-none">${done.length ? 'Everything for today is checked off. ✅'
           : 'No tasks scheduled for today.'}</div>`}
+      ${rest.length ? `<div class="tb-cap2">Also today</div>
+        <ul class="tb-list">${rest.map((t) => `<li>${taskBody(t)}${btns(t)}</li>`).join('')}</ul>` : ''}
       ${done.length ? `
         <div class="tb-donebar">
           <button class="tb-link" id="tb-toggledone">${done.length} done today · ${SHOW_DONE ? 'hide' : 'show'}</button>
         </div>
-        <ul class="tb-donelist ${SHOW_DONE ? '' : 'tb-hide'}">${done.map((g) => {
-          const m = DONE[String(g.id)] || {};
-          return `<li><span class="tb-g">${esc(g.name)}</span>
-            <span class="tb-meta">${esc(g.plan[k])}${m.by ? ` · done by ${esc(m.by)}` : ''}${m.at ? ` · ${esc(clock(m.at))}` : ''}</span>
-            <button class="tb-btn" data-undo="${esc(g.id)}">undo</button></li>`;
+        <ul class="tb-donelist ${SHOW_DONE ? '' : 'tb-hide'}">${done.map((t) => {
+          const m = DONE[t.key] || {};
+          return `<li><span class="tb-g">${esc(t.g.name)}</span>
+            <span class="tb-meta">${esc(t.text)}${m.by ? ` · done by ${esc(m.by)}` : ''}${m.at ? ` · ${esc(clock(m.at))}` : ''}</span>
+            <button class="tb-btn" data-undo="${esc(t.key)}">undo</button></li>`;
         }).join('')}</ul>` : ''}
       ${note && note.text ? `
         <div class="tb-note"><span class="tb-cap">📌 Note</span><span class="tb-notetext">${esc(note.text)}</span>
           <span class="tb-meta">${note.by ? ` — ${esc(note.by)}` : ''}${note.at ? `, ${esc(clock(note.at))}` : ''}</span></div>`
         : (mgr ? `<div class="tb-note"><button class="tb-link" id="tb-addnote">＋ add a note for today</button></div>` : '')}
+      ${comingUpHtml()}
     </div>`;
     EL.classList.remove('hidden');
   }
@@ -295,12 +368,16 @@
         const day = CAL.done[date] || (CAL.done[date] = {});
         if (done) day[String(gid)] = { by: ME.username, at: new Date().toISOString() };
         else { delete day[String(gid)]; if (!Object.keys(day).length) delete CAL.done[date]; }
-        // Keep the always-visible single-day view in sync when today itself changed.
+        // Keep the board in sync: DONE feeds today's list, RANGE feeds the
+        // "coming up" strip — a tick made in the calendar must show in both.
         if (date === ymd(new Date())) {
           if (done) DONE[String(gid)] = day[String(gid)];
           else delete DONE[String(gid)];
-          render();
         }
+        const rday = RANGE[date] || (RANGE[date] = {});
+        if (done) rday[String(gid)] = day[String(gid)];
+        else { delete rday[String(gid)]; if (!Object.keys(rday).length) delete RANGE[date]; }
+        render();
       }
       // Always re-render — on failure this reverts the checkbox's already-
       // flipped visual state back to what actually happened server-side.
@@ -319,6 +396,29 @@
     BUSY = true;
     try {
       await fetch(`/api/groups/${encodeURIComponent(gid)}/plan/${k}`, { method: 'DELETE' });
+      await refresh(true);
+      if (typeof board.onChange === 'function') board.onChange();
+    } finally { BUSY = false; }
+  }
+
+  // Delete today's ONE-OFF note off a group for good — the dated cousin of
+  // clearDay. Goes through the group update route because one-offs live in the
+  // group's `dates` field (editor/admin only, like the ✕ that calls it).
+  async function clearOneOff(gid) {
+    const g = GROUPS.find((x) => String(x.id) === String(gid));
+    const date = ymd(new Date());
+    if (!g || !g.dates || !g.dates[date]) return;
+    if (!confirm(`Remove "${g.dates[date]}" from ${g.name}?\n\n`
+      + `This deletes the one-off note for today (${date}) for good. `
+      + `To just check it off, use ✓ done.`)) return;
+    if (BUSY) return;
+    BUSY = true;
+    try {
+      const dates = { ...g.dates };
+      delete dates[date];
+      await fetch(`/api/groups/${encodeURIComponent(gid)}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dates }),
+      });
       await refresh(true);
       if (typeof board.onChange === 'function') board.onChange();
     } finally { BUSY = false; }
@@ -451,9 +551,9 @@
 
     const dowHeader = DAYS.map(([, label]) => `<div class="tb-cal-dow">${label}</div>`).join('');
     const cellHtml = grid.map((c) => {
-      const tasks = tasksForDay(c.dow);
+      const tasks = tasksOnDate(c.date);
       const doneMap = CAL.done[c.date] || {};
-      const doneCount = tasks.filter((g) => doneMap[String(g.id)]).length;
+      const doneCount = tasks.filter((t) => doneMap[t.key]).length;
       const openCount = tasks.length - doneCount;
       const hasNote = !!(CAL.notes[c.date] && CAL.notes[c.date].text);
       const cls = ['tb-cal-cell',
@@ -473,19 +573,19 @@
 
     const detail = m.querySelector('#tb-cal-detail');
     if (!CAL.selected) { detail.innerHTML = '<div class="tb-none">Pick a date to see its tasks.</div>'; return; }
-    const dow = dayKeyOf(CAL.selected);
-    const tasks = tasksForDay(dow);
+    const tasks = tasksOnDate(CAL.selected);
     const doneMap = CAL.done[CAL.selected] || {};
     const note = CAL.notes[CAL.selected];
     const label = fromYmd(CAL.selected).toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
 
     detail.innerHTML = `
       <h4>${esc(label)}</h4>
-      ${tasks.length ? `<ul class="tb-cal-tasklist">${tasks.map((g) => {
-        const mark = doneMap[String(g.id)];
+      ${tasks.length ? `<ul class="tb-cal-tasklist">${tasks.map((t) => {
+        const mark = doneMap[t.key];
         return `<label>
-          <input type="checkbox" data-cal-done="${esc(g.id)}" ${mark ? 'checked' : ''}>
-          <span class="tb-g">${esc(g.name)}</span><span class="tb-arrow">→</span><span class="tb-n">${esc(g.plan[dow])}</span>
+          <input type="checkbox" data-cal-done="${esc(t.key)}" ${mark ? 'checked' : ''}>
+          <span class="tb-g">${esc(t.g.name)}</span><span class="tb-arrow">→</span><span class="tb-n">${esc(t.text)}</span>
+          ${t.oneOff ? '<span class="tb-oneoff">one-off</span>' : ''}
           ${mark && mark.by ? `<span class="tb-meta">done by ${esc(mark.by)}${mark.at ? ` · ${esc(clock(mark.at))}` : ''}</span>` : ''}
         </label>`;
       }).join('')}</ul>` : '<div class="tb-none">No tasks scheduled for this date.</div>'}
@@ -568,6 +668,7 @@
         if (b.id === 'tb-addnote') { openCalendar(); CAL.editing = true; renderCalendarBody(); return; }
         if (b.dataset.done) { setDone(b.dataset.done, true); return; }
         if (b.dataset.undo) { setDone(b.dataset.undo, false); return; }
+        if (b.dataset.clearoneoff) { clearOneOff(b.dataset.clearoneoff); return; }
         if (b.dataset.clear) { clearDay(b.dataset.clear); }
       });
       await refresh(true);
