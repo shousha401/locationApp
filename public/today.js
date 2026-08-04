@@ -18,6 +18,10 @@
 // tasks off for a day other than today. Same read/write split as above: the
 // checkbox is open to everyone, the note's pencil-edit is editor/admin only.
 //
+// The editor ✕ also rides the "coming up" strip and the calendar's day view,
+// not just today's list — a wrong note is usually spotted days before it next
+// fires, and deleting it shouldn't have to wait for the day it's wrong on.
+//
 // "Today" is the VIEWER's today. The board is read standing in front of a screen
 // on the floor, so every date sent to the API comes from this browser.
 (function () {
@@ -94,6 +98,7 @@
     .tb-uprow { display:flex; gap:12px; align-items:baseline; padding:3px 0; font-size:14px;
       color:var(--muted); flex-wrap:wrap; }
     .tb-uprow .tb-g { color:var(--text); font-weight:600; }
+    .tb-uprow .tb-btn { padding:2px 10px; font-size:11px; }
     .tb-upn { color:var(--muted); }
     .tb-update { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11px;
       font-weight:700; color:var(--accent2); flex:0 0 96px; text-transform:uppercase; letter-spacing:.04em; }
@@ -166,6 +171,7 @@
     .tb-cal-detail { margin-top:14px; padding-top:12px; border-top:1px solid var(--line); }
     .tb-cal-detail h4 { margin:0 0 8px; font-size:13px; }
     .tb-cal-tasklist { margin:0 0 12px; padding:0; list-style:none; display:flex; flex-direction:column; gap:7px; }
+    .tb-cal-tasklist li { display:flex; align-items:center; gap:9px; flex-wrap:wrap; }
     .tb-cal-tasklist label { display:flex; align-items:center; gap:9px; font-size:15px; flex-wrap:wrap; }
     /* Named -notecard, not -note: "tb-cal-note" is already taken by the dot
        marker for "this date has a note" (see .tb-cal-dot.tb-cal-note above) —
@@ -244,6 +250,7 @@
   function comingUpHtml() {
     const d = new Date();
     const days = [];
+    const mgr = isMgr();
     for (let i = 1; i <= HORIZON; i++) {
       d.setDate(d.getDate() + 1);
       const date = ymd(d);
@@ -258,6 +265,11 @@
           <span class="tb-update">${i2 === 0 ? esc(label) : ''}</span>
           <span class="tb-g">${esc(t.g.name)}</span><span class="tb-arrow">→</span>
           <span class="tb-upn">${esc(t.text)}</span>
+          ${mgr ? (t.oneOff
+            ? `<button class="tb-btn tb-x" data-clearoneoff="${esc(t.g.id)}" data-date="${esc(date)}"
+                title="Delete this one-off note from ${esc(date)} for good">✕</button>`
+            : `<button class="tb-btn tb-x" data-clear="${esc(t.g.id)}" data-date="${esc(date)}"
+                title="Delete this note from every ${esc(dayKeyOf(date).toUpperCase())} — it won't come back next week">✕</button>`) : ''}
         </div>`));
       if (note && note.text) rows.push(`
         <div class="tb-uprow">
@@ -383,13 +395,16 @@
     } finally { BUSY = false; }
   }
 
-  async function clearDay(gid) {
+  // dateStr picks WHICH weekday's note dies (default: today) — the ✕ lives on
+  // the coming-up strip and the calendar too, where the date isn't today's.
+  async function clearDay(gid, dateStr) {
     const g = GROUPS.find((x) => String(x.id) === String(gid));
     if (!g) return;
-    const k = dayKey(new Date());
+    const k = dateStr ? dayKeyOf(dateStr) : dayKey(new Date());
+    if (!g.plan || !g.plan[k]) return;
     if (!confirm(`Remove "${g.plan[k]}" from ${g.name}?\n\n`
       + `This deletes the note off ${k.toUpperCase()} for good — it will not come back next week. `
-      + `To just check it off for today, use ✓ done.`)) return;
+      + `To just check it off for one day, use the ✓.`)) return;
     if (BUSY) return;
     BUSY = true;
     try {
@@ -399,16 +414,16 @@
     } finally { BUSY = false; }
   }
 
-  // Delete today's ONE-OFF note off a group for good — the dated cousin of
-  // clearDay. Goes through the group update route because one-offs live in the
-  // group's `dates` field (editor/admin only, like the ✕ that calls it).
-  async function clearOneOff(gid) {
+  // Delete a ONE-OFF note off a group for good — the dated cousin of clearDay.
+  // Goes through the group update route because one-offs live in the group's
+  // `dates` field (editor/admin only, like the ✕ that calls it).
+  async function clearOneOff(gid, dateStr) {
     const g = GROUPS.find((x) => String(x.id) === String(gid));
-    const date = ymd(new Date());
+    const date = dateStr || ymd(new Date());
     if (!g || !g.dates || !g.dates[date]) return;
     if (!confirm(`Remove "${g.dates[date]}" from ${g.name}?\n\n`
-      + `This deletes the one-off note for today (${date}) for good. `
-      + `To just check it off, use ✓ done.`)) return;
+      + `This deletes the one-off note for ${date} for good. `
+      + `To just check it off, use the ✓.`)) return;
     if (BUSY) return;
     BUSY = true;
     try {
@@ -464,6 +479,8 @@
       if (btn.dataset.calEditnote) { CAL.editing = true; return renderCalendarBody(); }
       if (btn.dataset.calCanceledit) { CAL.editing = false; return renderCalendarBody(); }
       if (btn.dataset.calSavenote) return saveDayNote();
+      if (btn.dataset.calClearoneoff && CAL.selected) return clearOneOff(btn.dataset.calClearoneoff, CAL.selected);
+      if (btn.dataset.calClear && CAL.selected) return clearDay(btn.dataset.calClear, CAL.selected);
     });
     m.addEventListener('change', (e) => {
       const cb = e.target.closest('input[type=checkbox][data-cal-done]');
@@ -580,11 +597,17 @@
       <h4>${esc(label)}</h4>
       ${tasks.length ? `<ul class="tb-cal-tasklist">${tasks.map((t) => {
         const mark = doneMap[t.key];
-        return `<label>
+        return `<li><label>
           <input type="checkbox" data-cal-done="${esc(t.key)}" ${mark ? 'checked' : ''}>
           <span class="tb-g">${esc(t.g.name)}</span><span class="tb-arrow">→</span><span class="tb-n">${esc(t.text)}</span>
           ${mark && mark.by ? `<span class="tb-meta">done by ${esc(mark.by)}${mark.at ? ` · ${esc(clock(mark.at))}` : ''}</span>` : ''}
-        </label>`;
+        </label>
+        ${mgr ? (t.oneOff
+          ? `<button class="tb-btn tb-x" data-cal-clearoneoff="${esc(t.g.id)}"
+              title="Delete this one-off note from ${esc(CAL.selected)} for good">✕</button>`
+          : `<button class="tb-btn tb-x" data-cal-clear="${esc(t.g.id)}"
+              title="Delete this note from every ${esc(dayKeyOf(CAL.selected).toUpperCase())} — it won't come back next week">✕</button>`) : ''}
+        </li>`;
       }).join('')}</ul>` : '<div class="tb-none">No tasks scheduled for this date.</div>'}
       <div class="tb-cal-notecard">
         <span class="tb-cap">📌 Note</span>
@@ -665,8 +688,9 @@
         if (b.id === 'tb-addnote') { openCalendar(); CAL.editing = true; renderCalendarBody(); return; }
         if (b.dataset.done) { setDone(b.dataset.done, true); return; }
         if (b.dataset.undo) { setDone(b.dataset.undo, false); return; }
-        if (b.dataset.clearoneoff) { clearOneOff(b.dataset.clearoneoff); return; }
-        if (b.dataset.clear) { clearDay(b.dataset.clear); }
+        // data-date rides the coming-up strip's buttons; today's list omits it.
+        if (b.dataset.clearoneoff) { clearOneOff(b.dataset.clearoneoff, b.dataset.date); return; }
+        if (b.dataset.clear) { clearDay(b.dataset.clear, b.dataset.date); }
       });
       await refresh(true);
     },
