@@ -3,6 +3,12 @@
 // codes; the dashboard aggregates the snapshot across each group so managers
 // can watch a family of products as one line instead of fifteen.
 //
+// A group can carry a STANDING NOTE (`note`): the job that has to happen every
+// day this group is handled, with no date on it at all. The Today board puts it
+// up every morning with its own ✓, and because every done-tick is dated, that
+// tick clears overnight by itself — so it comes back tomorrow without anyone
+// re-entering it. Use it for the rule; use `dates` below for the one-off.
+//
 // A group also carries a WEEKLY PLAN: which day it moves and where to. That is
 // the standing instruction the floor reads off the dashboard instead of waiting
 // for a manager to phone it in — so it repeats every week by design. A dated
@@ -79,6 +85,13 @@ function cleanPlan(obj) {
   return out;
 }
 
+// The group's STANDING note: the job that has to happen every day this group is
+// handled — "check the temp log on every pallet". It carries no date at all,
+// which is the whole difference from `dates`: the Today board repeats it every
+// morning, and the done-tick (which is always dated) clears it overnight on its
+// own. Blank removes it, same rule as the other two.
+const cleanNote = (s) => String(s == null ? '' : s).trim().slice(0, MAX_NOTE);
+
 // One-off dates: a free-text NOTE per exact calendar date, same shape as the
 // weekly plan but keyed by YYYY-MM-DD instead of a weekday — so it applies
 // once, not every week. Same "blank drops the key" rule as cleanPlan.
@@ -98,7 +111,7 @@ const get = (id) => groups.find((g) => g.id === Number(id)) || null;
 const nameTaken = (name, exceptId) => groups.some(
   (g) => g.id !== exceptId && g.name.toLowerCase() === name.toLowerCase());
 
-function create(name, items, plan, dates, who) {
+function create(name, items, plan, dates, note, who) {
   name = cleanName(name);
   items = cleanItems(items);
   if (!name) return { error: 'Group needs a name' };
@@ -107,6 +120,8 @@ function create(name, items, plan, dates, who) {
   const id = groups.reduce((m, g) => Math.max(m, g.id), 0) + 1;
   const rec = { id, name, items, plan: cleanPlan(plan), dates: cleanDates(dates),
     updatedBy: who || null, updatedAt: new Date().toISOString() };
+  const standing = cleanNote(note);
+  if (standing) rec.note = standing; // absent rather than empty, so `g.note` alone answers "has one"
   groups.push(rec);
   persist();
   return rec;
@@ -130,6 +145,11 @@ function update(id, patch, who) {
   // these replace rather than merge. Omitting a field entirely leaves it alone.
   if (patch.plan !== undefined) g.plan = cleanPlan(patch.plan);
   if (patch.dates !== undefined) g.dates = cleanDates(patch.dates);
+  if (patch.note !== undefined) {
+    const standing = cleanNote(patch.note);
+    if (standing) g.note = standing;
+    else delete g.note; // clearing the box is how a manager retires a standing job
+  }
   g.updatedBy = who || null;
   g.updatedAt = new Date().toISOString();
   persist();

@@ -311,8 +311,14 @@ function overview(groupDefs) {
 
   // Manager groups: index item code -> the groups that contain it, so the main
   // row loop below can accumulate group totals in the same single pass.
+  // dates/note ride along untouched. They are not aggregates and nothing here
+  // reads them — but the dashboard's group editor loads the group it is about
+  // to overwrite from THIS payload, so a field missing here comes back as
+  // undefined and gets saved as empty. Dropping them silently wiped a group's
+  // daily notes on every edit.
   const gAgg = (groupDefs || []).map((g) => ({
     id: g.id, name: g.name, items: g.items, plan: g.plan || {},
+    dates: g.dates || {}, note: g.note || '',
     updatedBy: g.updatedBy, updatedAt: g.updatedAt,
     units: 0, pallets: new Set(), redPallets: new Set(), cases: new Map(), weight: new Map(),
     perItem: new Map(), // item -> { units, pallets:Set, cases:Map, weight:Map, red:Set }
@@ -437,7 +443,7 @@ function overview(groupDefs) {
   const groupSummaries = gAgg
     .sort((a, b) => a.name.localeCompare(b.name))
     .map((g) => ({
-      id: g.id, name: g.name, items: g.items, plan: g.plan,
+      id: g.id, name: g.name, items: g.items, plan: g.plan, dates: g.dates, note: g.note,
       updatedBy: g.updatedBy, updatedAt: g.updatedAt,
       presentItems: g.perItem.size, units: g.units, pallets: g.pallets.size,
       redPallets: g.redPallets.size, cases: wArr(g.cases), weight: wArr(g.weight),

@@ -31,12 +31,19 @@
     a.navlink { color:var(--accent); text-decoration:none; font-size:12px; }
     button.link { background:none; border:0; color:var(--muted); cursor:pointer; font-size:12px; text-decoration:underline; }
 
-    .wrap { max-width:1180px; margin:0 auto; padding:20px; }
-    .search { display:flex; gap:10px; align-items:center; margin-bottom:8px; flex-wrap:wrap; }
-    .search input { flex:1 1 320px; min-width:220px; padding:12px 14px; font-size:16px;
+    /* Wider than the dashboard's 1180: this is the floor's screen, and the
+       week strip below the tasks wants every pixel of a warehouse monitor. */
+    .wrap { max-width:1500px; margin:0 auto; padding:20px; }
+
+    /* Notes and the location lookup sit side by side, so neither one leaves a
+       band of empty page behind it. */
+    .find { display:grid; grid-template-columns:1fr 400px; gap:20px; align-items:start; margin-bottom:20px; }
+    @media (max-width:980px){ .find { grid-template-columns:1fr; } }
+    .lookup-body { padding:14px 16px; }
+    .lookup-body input { width:100%; padding:12px 14px; font-size:16px;
       border-radius:10px; border:1px solid var(--line); background:var(--panel2); color:var(--text); }
-    .search input:focus { outline:none; border-color:var(--accent); }
-    .hint { color:var(--muted); font-size:12px; margin:2px 2px 20px; }
+    .lookup-body input:focus { outline:none; border-color:var(--accent); }
+    .hint { color:var(--muted); font-size:12px; margin:9px 2px 0; }
 
     .cols { display:grid; grid-template-columns:1fr 320px; gap:20px; align-items:start; }
     @media (max-width:860px){ .cols { grid-template-columns:1fr; } }
@@ -181,25 +188,32 @@
   <div class="wrap">
     <div id="todayBoard" class="today hidden"></div>
 
-    <!-- Every location note in one place, right under the tasks: the floor's job
-         is to read what was written for them, not to know which bins to search. -->
-    <div class="card allnotes" id="allNotesCard">
-      <h2>📝 Location notes <span class="meta" id="allNotesCount"></span></h2>
-      <div id="allNotes"><div class="empty" style="padding:18px 16px">Loading notes…</div></div>
-    </div>
+    <div class="find">
+      <!-- Every location note in one place, right under the tasks: the floor's job
+           is to read what was written for them, not to know which bins to search. -->
+      <div class="card allnotes" id="allNotesCard">
+        <h2>📝 Location notes <span class="meta" id="allNotesCount"></span></h2>
+        <div id="allNotes"><div class="empty" style="padding:18px 16px">Loading notes…</div></div>
+      </div>
 
-    <div class="search">
-      <input id="loc" list="locs" placeholder="Type a GT location — e.g. GT.2.Z2.C03" autocomplete="off" spellcheck="false">
-      <datalist id="locs"></datalist>
+      <div class="card">
+        <h2>🔎 Open a location</h2>
+        <div class="lookup-body">
+          <input id="loc" list="locs" placeholder="Type a GT location — e.g. GT.2.Z2.C03" autocomplete="off" spellcheck="false">
+          <datalist id="locs"></datalist>
+          <div class="hint" id="hint">Loading locations…</div>
+        </div>
+      </div>
     </div>
-    <div class="hint" id="hint">Loading locations…</div>
 
     <div id="banner"></div>
 
-    <div class="cols">
+    <!-- Hidden until a location is actually picked. An empty "pick a location"
+         panel used to sit here taking the biggest block on the page and saying
+         nothing; the prompt lives in the lookup card above instead. -->
+    <div class="cols hidden" id="cols">
       <div class="card" id="feedCard">
-        <div class="empty" id="feedEmpty">Pick a location to see what's in it.</div>
-        <div id="feed" class="hidden"></div>
+        <div id="feed"></div>
       </div>
 
       <div class="card hidden" id="notesCard">
@@ -371,8 +385,8 @@
     // manufacturer and date on every one of its 25+ lines. The pallet is the thing
     // a person is actually looking for, so it gets to be the headline.
     function renderFeed(data) {
-      $('feedEmpty').classList.add('hidden');
-      const feed = $('feed'); feed.classList.remove('hidden');
+      $('cols').classList.remove('hidden');
+      const feed = $('feed');
       $('banner').innerHTML = '';
 
       if (!data.found) {
@@ -512,11 +526,13 @@
         </div>`).join('');
     }
 
-    $('allNotes').addEventListener('click', (e) => {
+    // Scroll only once the feed is actually on screen — until it loads, the
+    // panel it scrolls to is still hidden and there is nothing to scroll to.
+    $('allNotes').addEventListener('click', async (e) => {
       const row = e.target.closest('.an-row');
       if (!row || !row.dataset.loc) return;
       $('loc').value = row.dataset.loc;
-      loadLocation(row.dataset.loc);
+      await loadLocation(row.dataset.loc);
       $('feedCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
 

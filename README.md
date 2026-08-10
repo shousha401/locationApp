@@ -38,9 +38,9 @@ slightly-stale, never blank.
 - `backend/inventory.js` — the snapshot: pull → index by location; also the dashboard's `overview()` aggregates.
 - `backend/notes.js` — the app's own notes/flags layer (never writes to Swarmbox).
 - `backend/requests.js` — the build-queue thread (`data/requests.json`).
-- `backend/groups.js` — manager-named product groups, each carrying a `plan`: a short
-  free-text note per weekday (`data/product-groups.json`). The week is a **standing**
-  instruction — it repeats until someone changes it.
+- `backend/groups.js` — manager-named product groups (`data/product-groups.json`), each
+  carrying a `note` (the standing job, no date), `dates` (a note per exact calendar
+  date) and a retired `plan` (a note per weekday). See **The Today board** below.
 - `backend/today.js` — the Today board's own state (`data/today-board.json`): done
   ticks and the manager's note for the day, both keyed by calendar date.
 - `public/today.js` — the Today board itself, shared by the feed and the dashboard so
@@ -110,27 +110,60 @@ Re-running `add-user.js` with an existing username resets that user's password/r
 
 ## The Today board
 
-The first thing on the feed and the dashboard: today's tasks, and the day's note.
+The first thing on the feed and the dashboard, read top to bottom:
 
-**Tasks** are the groups whose weekly plan has a note for today (`Mon → Send To CMP
-7AM`). "Today" is the **viewer's** day — the board is read standing in front of a
-screen on the floor, so the date always comes from that browser.
+1. **The date and the counts** — `N to do today`, `N not done`, `N done`. Read from
+   across the room, this line alone answers "is there anything on me right now".
+2. **⚠ Not done — carried over** — dated work from the last week that nobody ticked.
+   A task used to stop being drawn the moment its date passed, so the one case worth
+   shouting about was the one case the board went silent on. Each row keeps its own
+   date, and its **✓** ticks it off **on that date**, not today.
+3. **▸ Up next**, then **Also today** — today's open tasks, the first one full-size.
+4. **📌 Today's note** — the manager's line(s) for the day, in a card of its own.
+5. **The week ahead** — the next seven days as one strip, **every** day drawn even
+   when it holds nothing, because "is Thursday free?" is a question a list of only
+   the busy days can't answer. Tapping a day opens it in the month calendar.
+
+**Tasks** come from three places on a group (groups.js), and the board labels which:
+
+| Kind | Written as | Shows |
+|---|---|---|
+| **Standing note** (`note`) | no date at all — the rule for this group | every morning, tagged **every day**, after the dated work |
+| **Daily note** (`dates`) | one exact `YYYY-MM-DD` | that day only |
+| Weekly plan (`plan`) | a weekday — *retired, kept working* | every week on that weekday |
+
+A standing note needs no re-entering: the ✓ that clears it is dated like every other
+tick, so it expires overnight and the job is back the next morning. It's deliberately
+kept off the week strip and the month calendar — it lands on all seven days
+identically, and printing it there would bury the dated work those views exist to
+show; the strip states it once, as `plus N standing jobs every day`.
+
+"Today" is the **viewer's** day: the board is read standing in front of a screen on
+the floor, so every date sent to the API comes from that browser.
 
 - **✓ done** — anyone signed in, viewers included, checks a task off. It leaves the
   list on the spot and collapses into a `N done today · show` line that records who
   ticked it and when, with an **undo** — a mis-tap must not lose a task. The tick is
   dated, so it expires on its own: today's ✓ never hides the same task next week.
-- **✕** — editors only. This **deletes** that day's note off the group for good; it
-  will not come back next week. Confirmed before it happens, and it's the only one of
-  the two that changes what the week says.
+- **✕** — editors only, and it rides today's rows, the carried-over rows and the week
+  strip alike, because a wrong note is usually spotted days before it next fires. It
+  **deletes** the note off the group for good — off that weekday for a weekly one, off
+  that date for a one-off, off every future morning for a standing one. Confirmed
+  before it happens, and it's the only one of the two that changes what the week says.
 
-**The day's note** is one free-text line for the day, written by a manager and read by
-everyone. Editors get **✎ Notes**, which opens this week Monday-to-Sunday with the
-date beside each day, so Friday's note can be written on Monday. Viewers get no
-editing affordance at all — the routes enforce it too (`403` without `editor`).
+**The day's note** is one free-text note for the day, written by a manager and read by
+everyone. **📅 Month** opens any date in any month — so Friday's note can be written on
+Monday, and any day's tasks can be ticked. Viewers get no editing affordance at all —
+the routes enforce it too (`403` without `editor`).
 
-Both live in `data/today-board.json` and age out on their own: ticks after 21 days,
-notes after 120.
+The group editor is a modal, so opening it covers the board and the group list it was
+read from. It therefore carries an **Already written** panel: every note on every group
+— standing ones first, then dated from today forward — with the group being edited
+marked *this group*. Writing a note never has to depend on remembering the rest.
+
+Ticks and notes live in `data/today-board.json` and age out on their own: ticks after
+21 days, notes after 120. The carry-over looks back seven days, inside that retention,
+so a task can never outlive the ✓ that would have cleared it.
 
 ## The requests channel
 

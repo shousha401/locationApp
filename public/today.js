@@ -5,6 +5,12 @@
 // character-for-character what a manager reads on the dashboard.
 //
 // What it shows, in reading order:
+//   · the date, with live counts — still to do, slipped, done. This board is
+//     read from across the room on the floor, so the top line has to answer
+//     "is there anything on me right now" on its own.
+//   · anything NOT DONE from the last week. A task with no ✓ used to vanish at
+//     midnight, which is how a missed pickup stays missed; it now carries
+//     forward under its own date until someone ticks it or an editor deletes it.
 //   · today's tasks — every group with a note for today (groups.js), each with
 //     a ✓ that checks it off and, for editors, a ✕ that takes the note off the
 //     week for good. Checked-off tasks leave the list and collapse into one
@@ -12,6 +18,10 @@
 //   · the day's note — a manager's line for the day. EVERYONE reads it; only
 //     editors and admins write it. There is no inline editing here: a viewer
 //     can't put the board into an editable state at all.
+//   · the week ahead — the next seven days as one strip, EVERY day drawn even
+//     when it holds nothing, so "nothing on Thursday" is a fact you can read
+//     instead of a gap you have to trust. Tapping a day opens it in the
+//     calendar, where it can be ticked or edited.
 //
 // "📅 Month" opens a calendar (any date, any month) so a manager isn't limited
 // to writing this week's note, and so anyone can see what's scheduled and check
@@ -37,14 +47,21 @@
     const d = new Date(iso);
     return isNaN(d) ? '' : d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
   };
-  // How many days past today the "coming up" list looks. Six, not seven: a full
-  // week ahead lands on today's own weekday again, so the weekly plan's tasks
-  // would show twice — once big as today's, once dimmed as "next Wednesday's".
+  // How many days past today the week strip looks. Six, not seven: a full week
+  // ahead lands on today's own weekday again, so the weekly plan's tasks would
+  // show twice — once big as today's, once dimmed as "next Wednesday's".
   const HORIZON = 6;
+  // How far back the "not done" carry-over reads. A week: long enough that
+  // Monday still shows what slipped on the Friday before it, short enough that
+  // the board doesn't turn into an archive of everything anyone ever skipped.
+  // Stays inside today.js's 21-day tick retention, so a task can never be
+  // carried forward past the point where its own ✓ would have been pruned.
+  const LOOKBACK = 7;
 
   // Parse a YYYY-MM-DD string as a LOCAL date, never via `new Date(str)` — that
   // parses as UTC and can silently shift a day in any timezone behind UTC,
   // which is exactly the kind of bug "today is the viewer's today" exists to avoid.
+  const DATE_OK = /^\d{4}-\d{2}-\d{2}$/;
   const fromYmd = (s) => {
     const [y, mo, d] = String(s).split('-').map(Number);
     return new Date(y, mo - 1, d);
@@ -68,53 +85,134 @@
   }
 
   const CSS = `
-    .tb { padding:14px 18px; border-radius:11px; background:var(--panel);
+    .tb { padding:16px 18px 18px; border-radius:12px; background:var(--panel);
       border:1px solid var(--line); border-left:3px solid var(--accent2); }
-    .tb-head { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
-    .tb-head h3 { margin:0; font-size:11px; text-transform:uppercase; letter-spacing:.07em; color:var(--muted); }
-    .tb-head .tb-grow { flex:1 1 auto; }
-    .tb-list { margin:0; padding:0; list-style:none; display:flex; flex-direction:column; gap:8px; }
-    .tb-list li { font-size:17px; display:flex; align-items:center; gap:9px; flex-wrap:wrap; }
+
+    /* The date as a block, with live counts beside it. Read from across the
+       room, this line alone says whether anything is outstanding. */
+    .tb-top { display:flex; align-items:center; gap:18px; flex-wrap:wrap; margin-bottom:14px; }
+    .tb-datebox { line-height:1.12; }
+    .tb-dow { font-size:12px; font-weight:800; text-transform:uppercase; letter-spacing:.13em; color:var(--accent2); }
+    .tb-date { font-size:27px; font-weight:800; }
+    .tb-counts { display:flex; gap:8px; flex-wrap:wrap; }
+    .tb-count { display:inline-flex; align-items:baseline; gap:6px; padding:6px 13px; border-radius:999px;
+      font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em;
+      border:1px solid var(--line); background:var(--panel2); color:var(--muted); white-space:nowrap; }
+    .tb-count b { font-size:17px; font-weight:800; }
+    .tb-count.tb-c-open { color:var(--accent2); border-color:rgba(34,211,238,.45); background:rgba(34,211,238,.09); }
+    .tb-count.tb-c-late { color:var(--err); border-color:rgba(248,113,113,.5); background:rgba(248,113,113,.1); }
+    .tb-count.tb-c-done { color:var(--good); border-color:rgba(52,211,153,.4); background:rgba(52,211,153,.08); }
+    .tb-grow { flex:1 1 auto; }
+
     .tb-g { font-weight:700; }
     .tb-arrow { color:var(--muted); }
     .tb-n { color:var(--accent2); font-weight:700; }
-    .tb-none { color:var(--muted); font-size:13px; }
+    .tb-none { color:var(--muted); font-size:14px; padding:10px 0; }
+    /* Marks a standing job, so "the rule" never reads as "today's job". */
+    .tb-every { font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:.09em;
+      color:var(--muted); border:1px solid var(--line); background:var(--bg);
+      padding:3px 9px; border-radius:999px; white-space:nowrap; }
+    .tb-cap2 { font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:.11em;
+      color:var(--muted); margin:16px 0 8px; }
+
     /* Sized for a thumb on a floor tablet, not a mouse on a desk. */
     .tb-btn { padding:6px 13px; border-radius:999px; border:1px solid var(--line);
       background:var(--bg); color:var(--muted); cursor:pointer; font-size:12px; white-space:nowrap; }
     .tb-btn:hover { border-color:var(--accent); color:var(--accent); }
     .tb-btn.tb-x:hover { border-color:var(--err); color:var(--err); }
     .tb-btn[disabled] { opacity:.5; cursor:default; }
-    /* Airport-board rows: the UP NEXT task big and bright, later days dim. */
-    .tb-next { margin:2px 0 4px; padding:13px 16px; border-radius:10px;
-      background:rgba(34,211,238,.07); border:1px solid rgba(34,211,238,.45); }
-    .tb-next-cap { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.1em;
-      color:var(--accent2); margin-bottom:7px; }
-    .tb-next-row { display:flex; align-items:center; gap:11px; flex-wrap:wrap; font-size:23px; }
+    /* The ✓ is the one thing the floor actually presses, so it reads as the
+       action on the row rather than as one grey pill among several. */
+    .tb-btn.tb-done { padding:9px 18px; font-size:14px; font-weight:700;
+      color:var(--good); border-color:rgba(52,211,153,.45); background:rgba(52,211,153,.09); }
+    .tb-btn.tb-done:hover { color:var(--good); border-color:var(--good); background:rgba(52,211,153,.18); }
+
+    /* Airport-board split: the UP NEXT task big and bright, the rest queued. */
+    .tb-next { margin:0 0 4px; padding:15px 18px; border-radius:11px;
+      background:rgba(34,211,238,.07); border:1px solid rgba(34,211,238,.45);
+      border-left:4px solid var(--accent2); }
+    .tb-next-cap { font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:.12em;
+      color:var(--accent2); margin-bottom:8px; }
+    .tb-next-row { display:flex; align-items:center; gap:12px; flex-wrap:wrap; font-size:25px; line-height:1.25; }
     .tb-next-row .tb-n { color:var(--accent2); }
-    .tb-cap2 { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.08em;
-      color:var(--muted); margin:13px 0 7px; }
-    .tb-up { margin-top:13px; padding-top:4px; border-top:1px solid var(--line); }
-    .tb-uprow { display:flex; gap:12px; align-items:baseline; padding:3px 0; font-size:14px;
-      color:var(--muted); flex-wrap:wrap; }
-    .tb-uprow .tb-g { color:var(--text); font-weight:600; }
-    .tb-uprow .tb-btn { padding:2px 10px; font-size:11px; }
-    .tb-upn { color:var(--muted); }
-    .tb-update { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11px;
-      font-weight:700; color:var(--accent2); flex:0 0 96px; text-transform:uppercase; letter-spacing:.04em; }
-    .tb-upnote { font-size:13px; font-style:italic; }
-    .tb-donebar { margin-top:11px; }
+    .tb-list { margin:0; padding:0; list-style:none; display:flex; flex-direction:column; gap:7px; }
+    .tb-list li { font-size:18px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+      padding:10px 14px; border-radius:10px; background:var(--panel2); border:1px solid var(--line); }
+
+    /* Carried over: dated work nobody ticked. Red, above today's own tasks,
+       and each row keeps its own date — "when" is the whole point of it. */
+    .tb-late { margin:0 0 14px; padding:12px 16px 13px; border-radius:11px;
+      background:rgba(248,113,113,.07); border:1px solid rgba(248,113,113,.42);
+      border-left:4px solid var(--err); }
+    .tb-late-cap { font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:.12em;
+      color:var(--err); margin-bottom:8px; }
+    .tb-late-row { display:flex; align-items:center; gap:11px; flex-wrap:wrap; font-size:17px; padding:5px 0; }
+    .tb-late-date { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11px; font-weight:800;
+      color:var(--err); text-transform:uppercase; letter-spacing:.05em; flex:0 0 92px; }
+
+    .tb-donebar { margin-top:13px; }
     .tb-link { background:none; border:0; padding:0; color:var(--muted); cursor:pointer;
       font-size:12px; text-decoration:underline; }
     .tb-donelist { margin:8px 0 0; padding:0; list-style:none; display:flex; flex-direction:column; gap:6px; }
     .tb-donelist li { font-size:13px; display:flex; align-items:center; gap:9px; flex-wrap:wrap; color:var(--muted); }
     .tb-donelist .tb-g { font-weight:600; text-decoration:line-through; }
     .tb-meta { font-size:11px; color:var(--muted); }
-    .tb-note { margin-top:12px; padding-top:11px; border-top:1px solid var(--line); font-size:15px; }
-    .tb-note .tb-cap { font-size:11px; text-transform:uppercase; letter-spacing:.06em;
-      color:var(--muted); margin-right:8px; }
-    .tb-notetext { white-space:pre-wrap; }
+
+    /* The day's note is a manager's instructions, often several lines of them —
+       it gets a card of its own rather than a footnote under the tasks. */
+    .tb-note { margin-top:16px; padding:13px 16px; border-radius:11px; font-size:16px;
+      background:rgba(251,191,36,.06); border:1px solid rgba(251,191,36,.32);
+      border-left:4px solid var(--warn); }
+    .tb-note .tb-cap { display:block; font-size:10px; font-weight:800; text-transform:uppercase;
+      letter-spacing:.12em; color:var(--warn); margin-bottom:6px; }
+    .tb-notetext { white-space:pre-wrap; line-height:1.5; }
+    .tb-addnote { margin-top:16px; }
     .tb-hide { display:none; }
+
+    /* ── The week ahead ───────────────────────────────────────────────────────
+       Seven days, every one of them drawn — an empty Thursday is information,
+       and a list that skips empty days can't tell you the week is clear. */
+    .tb-week { margin-top:18px; padding-top:15px; border-top:1px solid var(--line); }
+    .tb-wk-head { display:flex; align-items:baseline; gap:9px; flex-wrap:wrap; margin-bottom:9px; }
+    .tb-wk-head .tb-cap2 { margin:0; }
+    .tb-wk-sub { font-size:11px; color:var(--muted); }
+    .tb-wk-grid { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:7px; }
+    .tb-wk-cell { display:flex; flex-direction:column; gap:7px; min-height:104px; padding:9px 10px;
+      border-radius:10px; border:1px solid var(--line); background:var(--panel2); cursor:pointer;
+      transition:transform .12s, border-color .12s, background-color .12s; }
+    .tb-wk-cell:hover { border-color:var(--accent); transform:translateY(-2px); }
+    .tb-wk-cell.tb-wk-now { border-color:var(--accent2); background:rgba(34,211,238,.08); }
+    .tb-wk-cell.tb-wk-now .tb-wk-day { color:var(--accent2); }
+    .tb-wk-cell.tb-wk-rest { background:rgba(23,32,51,.5); }
+    .tb-wk-cell.tb-wk-rest .tb-wk-daynum { opacity:.65; }
+    .tb-wk-daytop { display:flex; flex-direction:column; gap:1px; }
+    .tb-wk-day { font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:.1em; color:var(--muted); }
+    .tb-wk-daynum { font-size:15px; font-weight:700; }
+    .tb-wk-body { display:flex; flex-direction:column; gap:7px; }
+    .tb-wk-task { display:flex; gap:6px; align-items:flex-start; font-size:12px; line-height:1.35; }
+    .tb-wk-task > div { min-width:0; }
+    .tb-wk-task b { display:block; font-weight:700; word-break:break-word; }
+    .tb-wk-task i { display:block; font-style:normal; color:var(--accent2); word-break:break-word; }
+    .tb-wk-task.tb-wk-off { opacity:.45; }
+    .tb-wk-task.tb-wk-off b, .tb-wk-task.tb-wk-off i { text-decoration:line-through; color:var(--muted); }
+    .tb-wk-task .tb-btn { padding:0 6px; font-size:11px; line-height:17px; margin-left:auto; }
+    .tb-wk-note { font-size:11px; line-height:1.4; color:var(--warn); white-space:pre-wrap; word-break:break-word; }
+    .tb-wk-empty { font-size:20px; color:var(--muted); opacity:.3; }
+    .tb-wk-sum { font-size:12px; color:var(--muted); line-height:1.4; }
+    .tb-wk-sum b { display:block; font-size:15px; color:var(--accent2); }
+    .tb-wk-sum.tb-wk-clear b { color:var(--good); }
+
+    /* Under ~820px the seven columns stop being readable, so the strip becomes
+       the same seven days stacked — date on the left, that day's work beside it. */
+    @media (max-width:820px) {
+      .tb-wk-grid { grid-template-columns:1fr; gap:5px; }
+      .tb-wk-cell { flex-direction:row; align-items:flex-start; gap:13px; min-height:0; padding:9px 12px; }
+      .tb-wk-cell:hover { transform:none; }
+      .tb-wk-daytop { flex-direction:row; align-items:baseline; gap:7px; flex:0 0 96px; }
+      .tb-wk-body { flex:1 1 auto; }
+      .tb-next-row { font-size:21px; }
+      .tb-date { font-size:23px; }
+    }
 
     .tb-modal { position:fixed; inset:0; background:rgba(2,6,23,.85); display:none; z-index:60;
       align-items:center; justify-content:center; padding:20px; }
@@ -215,6 +313,23 @@
       || (a.oneOff ? 1 : 0) - (b.oneOff ? 1 : 0));
   }
 
+  // A group's STANDING note (groups.js) — the job that has to happen every day
+  // this group is handled, carrying no date at all. Deliberately NOT part of
+  // tasksOnDate: that answers "what is scheduled on this date", and a standing
+  // job isn't scheduled, it's a rule. Keeping it out means the week strip and
+  // the month calendar don't print the same line on all seven days and bury the
+  // dated work they exist to show.
+  //
+  // It still ticks off like anything else, and because every tick is dated, the
+  // ✓ expires overnight by itself — done today, back tomorrow, with nobody
+  // re-entering it. Its `n:` key prefix keeps that tick clear of the weekly
+  // (bare id) and one-off (`d:`) ticks for the same group.
+  function standingTasks() {
+    return GROUPS.filter((g) => g.note)
+      .map((g) => ({ g, key: 'n:' + g.id, text: g.note, oneOff: false, standing: true }))
+      .sort((a, b) => String(a.g.name).localeCompare(String(b.g.name)));
+  }
+
   // The month calendar's own state — separate from DONE/NOTES (which back the
   // always-visible, frequently-polled single-day view) so opening/navigating
   // the calendar never changes that view's fetch behavior. See saveDayNote()/
@@ -229,13 +344,18 @@
     document.head.appendChild(s);
   }
 
+  // One call covers the whole board: LOOKBACK days back for what never got
+  // ticked, HORIZON days forward for the week strip. The API takes any span, so
+  // widening the window costs one query, not one per day.
   async function fetchState() {
     const date = ymd(new Date());
+    const start = new Date();
+    start.setDate(start.getDate() - LOOKBACK);
     const end = new Date();
     end.setDate(end.getDate() + HORIZON);
     const [g, t] = await Promise.all([
       fetch('/api/groups').then((r) => r.json()),
-      fetch(`/api/today?date=${date}&from=${date}&to=${ymd(end)}`).then((r) => r.json()),
+      fetch(`/api/today?date=${date}&from=${ymd(start)}&to=${ymd(end)}`).then((r) => r.json()),
     ]);
     GROUPS = (g && g.groups) || [];
     DONE = (t && t.done) || {};
@@ -243,43 +363,103 @@
     NOTES = (t && t.notes) || {};
   }
 
-  // The "coming up" strip under today — the next HORIZON days that actually
-  // have something on them, airport-departures style: date on the left, task
-  // on the right, dimmer than today because nobody acts on Friday's row on a
-  // Wednesday. Pre-ticked tasks (via the calendar) stay out of it.
-  function comingUpHtml() {
+  // Everything from the last LOOKBACK days that never got a ✓, oldest first.
+  // Before this existed a task simply stopped being drawn the moment its date
+  // passed, so the one case worth shouting about — work that didn't happen —
+  // was the one case the board went silent on. Each row keeps its own date;
+  // the ✓ ticks it off ON that date, not today, so the record stays honest.
+  function overdueTasks() {
+    const out = [];
     const d = new Date();
-    const days = [];
-    const mgr = isMgr();
-    for (let i = 1; i <= HORIZON; i++) {
-      d.setDate(d.getDate() + 1);
+    d.setDate(d.getDate() - LOOKBACK);
+    for (let i = 0; i < LOOKBACK; i++) {
       const date = ymd(d);
       const doneMap = RANGE[date] || {};
-      const tasks = tasksOnDate(date).filter((t) => !doneMap[t.key]);
-      const note = NOTES[date];
-      if (!tasks.length && !(note && note.text)) continue;
-      const label = d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
-      const rows = [];
-      tasks.forEach((t, i2) => rows.push(`
-        <div class="tb-uprow">
-          <span class="tb-update">${i2 === 0 ? esc(label) : ''}</span>
-          <span class="tb-g">${esc(t.g.name)}</span><span class="tb-arrow">→</span>
-          <span class="tb-upn">${esc(t.text)}</span>
-          ${mgr ? (t.oneOff
-            ? `<button class="tb-btn tb-x" data-clearoneoff="${esc(t.g.id)}" data-date="${esc(date)}"
-                title="Delete this one-off note from ${esc(date)} for good">✕</button>`
-            : `<button class="tb-btn tb-x" data-clear="${esc(t.g.id)}" data-date="${esc(date)}"
-                title="Delete this note from every ${esc(dayKeyOf(date).toUpperCase())} — it won't come back next week">✕</button>`) : ''}
-        </div>`));
-      if (note && note.text) rows.push(`
-        <div class="tb-uprow">
-          <span class="tb-update">${tasks.length ? '' : esc(label)}</span>
-          <span class="tb-upnote">📌 ${esc(note.text)}</span>
-        </div>`);
-      days.push(rows.join(''));
+      for (const t of tasksOnDate(date)) {
+        // The far end of the window lands on today's own weekday, so a WEEKLY
+        // task there is the same standing instruction today's list is already
+        // showing — listing it again would read as two jobs. A one-off can't
+        // recur, so one dated exactly a week ago really is still outstanding.
+        if (i === 0 && !t.oneOff) continue;
+        if (!doneMap[t.key]) out.push({ ...t, date });
+      }
+      d.setDate(d.getDate() + 1);
     }
-    if (!days.length) return '';
-    return `<div class="tb-up"><div class="tb-cap2">Coming up</div>${days.join('')}</div>`;
+    return out;
+  }
+
+  // The week ahead: today plus HORIZON days, as one strip of seven cells.
+  // Every day gets a cell even when it holds nothing — a list that skips empty
+  // days can tell you what's scheduled but never that the week is clear, and
+  // "is Thursday free?" is the question this is here to answer. Tapping a cell
+  // opens that date in the month calendar (tick it there, or edit its note).
+  function weekStripHtml() {
+    const d = new Date();
+    const mgr = isMgr();
+    const todayDate = ymd(d);
+    let ahead = 0;
+    const cells = [];
+
+    for (let i = 0; i <= HORIZON; i++) {
+      const date = ymd(d);
+      const doneMap = RANGE[date] || {};
+      const isToday = date === todayDate;
+      // Standing jobs count toward TODAY's cell, because that cell mirrors the
+      // header's count of what's actually left to do. They stay out of the
+      // other six: they land on every one of them identically, so printing
+      // them there would say nothing about what makes those days different.
+      const tasks = isToday ? tasksOnDate(date).concat(standingTasks()) : tasksOnDate(date);
+      const open = tasks.filter((t) => !doneMap[t.key]);
+      const note = NOTES[date];
+      const weekend = d.getDay() === 0 || d.getDay() === 6;
+      if (!isToday) ahead += open.length;
+
+      let body;
+      if (isToday) {
+        // Today's own work is already spelled out full-size above; repeating it
+        // here would just be the same words twice on one screen.
+        body = `<div class="tb-wk-sum${open.length ? '' : ' tb-wk-clear'}">
+          ${open.length ? `<b>${open.length} to do</b>listed above ↑`
+            : `<b>all clear</b>${tasks.length ? `${tasks.length} done` : 'nothing scheduled'}`}</div>`;
+      } else if (tasks.length || (note && note.text)) {
+        body = tasks.map((t) => `
+          <div class="tb-wk-task${doneMap[t.key] ? ' tb-wk-off' : ''}">
+            <div><b>${esc(t.g.name)}</b><i>${esc(t.text)}</i></div>
+            ${mgr && !doneMap[t.key] ? (t.oneOff
+              ? `<button class="tb-btn tb-x" data-clearoneoff="${esc(t.g.id)}" data-date="${esc(date)}"
+                  title="Delete this one-off note from ${esc(date)} for good">✕</button>`
+              : `<button class="tb-btn tb-x" data-clear="${esc(t.g.id)}" data-date="${esc(date)}"
+                  title="Delete this note from every ${esc(dayKeyOf(date).toUpperCase())} — it won't come back next week">✕</button>`) : ''}
+          </div>`).join('')
+          + (note && note.text ? `<div class="tb-wk-note">📌 ${esc(note.text)}</div>` : '');
+      } else {
+        body = '<div class="tb-wk-empty">—</div>';
+      }
+
+      cells.push(`<div class="tb-wk-cell${isToday ? ' tb-wk-now' : ''}${weekend && !isToday ? ' tb-wk-rest' : ''}"
+        data-wkday="${esc(date)}" title="Open ${esc(date)} in the calendar">
+        <div class="tb-wk-daytop">
+          <span class="tb-wk-day">${isToday ? 'Today' : esc(d.toLocaleDateString(undefined, { weekday: 'short' }))}</span>
+          <span class="tb-wk-daynum">${esc(d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }))}</span>
+        </div>
+        <div class="tb-wk-body">${body}</div>
+      </div>`);
+      d.setDate(d.getDate() + 1);
+    }
+
+    // Said once, plainly, instead of repeated in all seven cells: the standing
+    // jobs are on every one of these days too.
+    const standing = standingTasks().length;
+    return `<div class="tb-week">
+      <div class="tb-wk-head">
+        <div class="tb-cap2">The week ahead</div>
+        <span class="tb-wk-sub">${ahead ? `${ahead} task${ahead === 1 ? '' : 's'} in the next ${HORIZON} days`
+          : `nothing scheduled in the next ${HORIZON} days`}${standing
+          ? ` · plus ${standing} standing job${standing === 1 ? '' : 's'} every day`
+          : ''} · tap a day to open it</span>
+      </div>
+      <div class="tb-wk-grid">${cells.join('')}</div>
+    </div>`;
   }
 
   function render() {
@@ -287,37 +467,65 @@
     const now = new Date();
     const k = dayKey(now);
     const date = ymd(now);
-    const dateStr = now.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
-    const all = tasksOnDate(date);
+    // Standing jobs come after the dated work, so UP NEXT is whatever is
+    // actually scheduled for today — a truck at 7am outranks a daily rule.
+    const all = tasksOnDate(date).concat(standingTasks());
     // Checked off means gone from the list — that is the whole point of the tick.
     const open = all.filter((t) => !DONE[t.key]);
     const done = all.filter((t) => DONE[t.key]);
+    const late = overdueTasks();
     const note = NOTES[date];
     const mgr = isMgr();
 
     // Airport-board split: the first open task is the big UP NEXT row, the rest
-    // of today queues under it, and later days dim below (comingUpHtml).
+    // of today queues under it, and the week dims below (weekStripHtml).
     const next = open[0] || null;
     const rest = open.slice(1);
 
-    const btns = (t) => `
-      <button class="tb-btn tb-done" data-done="${esc(t.key)}" title="Check this off for today">✓ done</button>
-      ${mgr ? (t.oneOff
-        ? `<button class="tb-btn tb-x" data-clearoneoff="${esc(t.g.id)}"
-            title="Delete this one-off note from ${esc(date)} for good">✕</button>`
-        : `<button class="tb-btn tb-x" data-clear="${esc(t.g.id)}"
-            title="Delete this note from ${esc(k.toUpperCase())} — it won't come back next week">✕</button>`) : ''}`;
+    // date is optional: today's rows tick today, a carried-over row ticks the
+    // day it was actually scheduled for.
+    const btns = (t, on) => `
+      <button class="tb-btn tb-done" data-done="${esc(t.key)}"${on ? ` data-date="${esc(on)}"` : ''}
+        title="Check this off for ${on ? esc(on) : 'today'}">✓ done</button>
+      ${mgr ? (t.standing
+        ? `<button class="tb-btn tb-x" data-clearnote="${esc(t.g.id)}"
+            title="Delete this standing note off ${esc(t.g.name)} — it will stop coming back every day">✕</button>`
+        : t.oneOff
+          ? `<button class="tb-btn tb-x" data-clearoneoff="${esc(t.g.id)}"${on ? ` data-date="${esc(on)}"` : ''}
+              title="Delete this one-off note from ${esc(on || date)} for good">✕</button>`
+          : `<button class="tb-btn tb-x" data-clear="${esc(t.g.id)}"${on ? ` data-date="${esc(on)}"` : ''}
+              title="Delete this note from ${esc((on ? dayKeyOf(on) : k).toUpperCase())} — it won't come back next week">✕</button>`) : ''}`;
 
+    // The "every day" chip is what separates a standing rule from today's own
+    // work at a glance — without it the floor can't tell which lines are the
+    // reason today is different.
     const taskBody = (t) => `
       <span class="tb-g">${esc(t.g.name)}</span><span class="tb-arrow">→</span>
-      <span class="tb-n">${esc(t.text)}</span>`;
+      <span class="tb-n">${esc(t.text)}</span>
+      ${t.standing ? '<span class="tb-every">every day</span>' : ''}`;
 
     EL.innerHTML = `<div class="tb">
-      <div class="tb-head">
-        <h3>📋 Today · ${esc(dateStr)}</h3>
+      <div class="tb-top">
+        <div class="tb-datebox">
+          <div class="tb-dow">${esc(now.toLocaleDateString(undefined, { weekday: 'long' }))}</div>
+          <div class="tb-date">${esc(now.toLocaleDateString(undefined, { month: 'long', day: 'numeric' }))}</div>
+        </div>
+        <div class="tb-counts">
+          <span class="tb-count${open.length ? ' tb-c-open' : ''}"><b>${open.length}</b> to do today</span>
+          ${late.length ? `<span class="tb-count tb-c-late"><b>${late.length}</b> not done</span>` : ''}
+          ${done.length ? `<span class="tb-count tb-c-done"><b>${done.length}</b> done</span>` : ''}
+        </div>
         <div class="tb-grow"></div>
         <button class="tb-btn" id="tb-cal-open">📅 Month</button>
       </div>
+      ${late.length ? `
+        <div class="tb-late">
+          <div class="tb-late-cap">⚠ Not done — carried over</div>
+          ${late.map((t) => `<div class="tb-late-row">
+            <span class="tb-late-date">${esc(fromYmd(t.date).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }))}</span>
+            ${taskBody(t)}${btns(t, t.date)}
+          </div>`).join('')}
+        </div>` : ''}
       ${next ? `
         <div class="tb-next">
           <div class="tb-next-cap">▸ Up next</div>
@@ -337,10 +545,11 @@
             <button class="tb-btn" data-undo="${esc(t.key)}">undo</button></li>`;
         }).join('')}</ul>` : ''}
       ${note && note.text ? `
-        <div class="tb-note"><span class="tb-cap">📌 Note</span><span class="tb-notetext">${esc(note.text)}</span>
-          <span class="tb-meta">${note.by ? ` — ${esc(note.by)}` : ''}${note.at ? `, ${esc(clock(note.at))}` : ''}</span></div>`
-        : (mgr ? `<div class="tb-note"><button class="tb-link" id="tb-addnote">＋ add a note for today</button></div>` : '')}
-      ${comingUpHtml()}
+        <div class="tb-note"><span class="tb-cap">📌 Today's note</span>
+          <span class="tb-notetext">${esc(note.text)}</span>
+          <div class="tb-meta">${note.by ? `— ${esc(note.by)}` : ''}${note.at ? `, ${esc(clock(note.at))}` : ''}</div></div>`
+        : (mgr ? `<div class="tb-addnote"><button class="tb-link" id="tb-addnote">＋ add a note for today</button></div>` : '')}
+      ${weekStripHtml()}
     </div>`;
     EL.classList.remove('hidden');
   }
@@ -359,11 +568,17 @@
     if (BUSY) return;
     BUSY = true;
     try {
-      if (!(await postDone(ymd(new Date()), gid, done))) return;
+      const date = ymd(new Date());
+      if (!(await postDone(date, gid, done))) return;
       // Reflect it locally so the task leaves the list on the tap, not on the
       // next poll — someone standing at the screen must see it take.
       if (done) DONE[String(gid)] = { by: ME.username, at: new Date().toISOString() };
       else delete DONE[String(gid)];
+      // DONE feeds today's list; RANGE feeds today's cell in the week strip.
+      // Both have to move, or the strip goes on counting a finished task.
+      const day = RANGE[date] || (RANGE[date] = {});
+      if (done) day[String(gid)] = DONE[String(gid)];
+      else { delete day[String(gid)]; if (!Object.keys(day).length) delete RANGE[date]; }
       render();
     } finally { BUSY = false; }
   }
@@ -437,6 +652,27 @@
     } finally { BUSY = false; }
   }
 
+  // Retire a group's STANDING note for good — the third cousin of clearDay and
+  // clearOneOff. Worth a blunter confirm than the other two: this one isn't
+  // "not this week", it's "never again", and it takes the job off every future
+  // morning at once.
+  async function clearNote(gid) {
+    const g = GROUPS.find((x) => String(x.id) === String(gid));
+    if (!g || !g.note) return;
+    if (!confirm(`Remove the standing note "${g.note}" from ${g.name}?\n\n`
+      + `This deletes it off the group for good — it will stop appearing every day, `
+      + `not just today. To clear it for today only, use the ✓.`)) return;
+    if (BUSY) return;
+    BUSY = true;
+    try {
+      await fetch(`/api/groups/${encodeURIComponent(gid)}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ note: '' }),
+      });
+      await refresh(true);
+      if (typeof board.onChange === 'function') board.onChange();
+    } finally { BUSY = false; }
+  }
+
   // ── The month calendar ──────────────────────────────────────────────────────
   // Everyone can open it and check tasks off for any date; only editors and
   // admins can write that date's note (gated inline in renderCalendarBody()).
@@ -494,12 +730,14 @@
     return m;
   }
 
-  function openCalendar() {
+  // Opens on `dateStr` when given — the week strip hands it the day that was
+  // tapped, so a manager lands on Thursday's tasks instead of today's.
+  function openCalendar(dateStr) {
     const m = modal();
-    const now = new Date();
-    CAL.year = now.getFullYear();
-    CAL.month = now.getMonth();
-    CAL.selected = ymd(now);
+    const on = dateStr && DATE_OK.test(dateStr) ? fromYmd(dateStr) : new Date();
+    CAL.year = on.getFullYear();
+    CAL.month = on.getMonth();
+    CAL.selected = ymd(on);
     CAL.editing = false;
     CAL.error = '';
     m.classList.add('on');
@@ -682,15 +920,27 @@
       injectCss();
       EL.addEventListener('click', (e) => {
         const b = e.target.closest('button');
-        if (!b) return;
-        if (b.id === 'tb-toggledone') { SHOW_DONE = !SHOW_DONE; render(); return; }
-        if (b.id === 'tb-cal-open') { openCalendar(); return; }
-        if (b.id === 'tb-addnote') { openCalendar(); CAL.editing = true; renderCalendarBody(); return; }
-        if (b.dataset.done) { setDone(b.dataset.done, true); return; }
-        if (b.dataset.undo) { setDone(b.dataset.undo, false); return; }
-        // data-date rides the coming-up strip's buttons; today's list omits it.
-        if (b.dataset.clearoneoff) { clearOneOff(b.dataset.clearoneoff, b.dataset.date); return; }
-        if (b.dataset.clear) { clearDay(b.dataset.clear, b.dataset.date); }
+        if (b) {
+          if (b.id === 'tb-toggledone') { SHOW_DONE = !SHOW_DONE; render(); return; }
+          if (b.id === 'tb-cal-open') { openCalendar(); return; }
+          if (b.id === 'tb-addnote') { openCalendar(); CAL.editing = true; renderCalendarBody(); return; }
+          // data-date rides the week strip's and the carry-over rows' buttons;
+          // today's own list omits it and means today.
+          if (b.dataset.done) {
+            if (b.dataset.date) setDoneOn(b.dataset.date, b.dataset.done, true);
+            else setDone(b.dataset.done, true);
+            return;
+          }
+          if (b.dataset.undo) { setDone(b.dataset.undo, false); return; }
+          if (b.dataset.clearnote) { clearNote(b.dataset.clearnote); return; }
+          if (b.dataset.clearoneoff) { clearOneOff(b.dataset.clearoneoff, b.dataset.date); return; }
+          if (b.dataset.clear) { clearDay(b.dataset.clear, b.dataset.date); }
+          return;
+        }
+        // A week-strip cell is a div, not a button, so the editor ✕ inside it
+        // stays a real button rather than illegal nested interactive markup.
+        const cell = e.target.closest('[data-wkday]');
+        if (cell) openCalendar(cell.dataset.wkday);
       });
       await refresh(true);
     },

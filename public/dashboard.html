@@ -146,6 +146,30 @@
     .gsheet h4 { margin:16px 0 8px; font-size:11px; color:var(--muted);
       text-transform:uppercase; letter-spacing:.06em; }
     .gsheet h4 span { text-transform:none; letter-spacing:0; }
+    .gstanding { width:100%; min-height:52px; resize:vertical; padding:9px 11px; font:inherit; font-size:13px;
+      border-radius:9px; border:1px solid var(--line); background:var(--panel2); color:var(--text); }
+    .gstanding:focus { outline:none; border-color:var(--accent); }
+
+    /* "Already written": the editor is a modal, so opening it covers the board
+       and the group list it was read from. Without this the only place to check
+       what the floor has already been told is memory. */
+    .gsheet h4.gwhead { display:flex; align-items:baseline; gap:7px; flex-wrap:wrap; }
+    .gwcount { margin-left:auto; color:var(--accent2); font-weight:700; }
+    .gwritten { border:1px solid var(--line); border-radius:9px; background:var(--panel2);
+      max-height:190px; overflow:auto; }
+    .gw-row { display:flex; gap:10px; align-items:baseline; flex-wrap:wrap; padding:6px 11px;
+      border-bottom:1px solid rgba(51,65,85,.45); font-size:12px; }
+    .gw-row:last-child { border-bottom:0; }
+    .gw-name { flex:0 0 130px; font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .gw-when { flex:0 0 84px; color:var(--accent2); font-weight:700; font-size:10px;
+      text-transform:uppercase; letter-spacing:.05em; }
+    .gw-text { flex:1 1 160px; color:var(--muted); }
+    /* The group being edited is in the list too — "everything written" has to
+       mean everything — but marked, so it never reads as somebody else's job. */
+    .gw-row.gw-mine { background:rgba(56,189,248,.09); }
+    .gw-row.gw-mine .gw-text { color:var(--text); }
+    .gw-tag { font-size:10px; color:var(--accent); white-space:nowrap; }
+    .gw-none { padding:12px; font-size:12px; color:var(--muted); }
     /* Both calendar widgets below share one visual language: a filled accent
        "chip" for whatever's selected (so it reads instantly, not just a thin
        border), a soft tint + ring for "today" so the two states never look
@@ -236,7 +260,14 @@
     <input type="text" id="gname" placeholder="Group name — what the floor calls these" maxlength="60">
     <div class="zones" id="gpicktabs" style="margin-bottom:9px"></div>
     <div class="picklist" id="gpick"></div>
-    <h4>Daily note <span>— pick the date on the calendar, write the note, and that's what the floor reads that day.</span></h4>
+    <h4 class="gwhead">Already written <span>— every note on every group, so writing one never depends on
+      remembering the rest.</span><span class="gwcount" id="gwrittencount"></span></h4>
+    <div class="gwritten" id="gwritten"></div>
+
+    <h4>Standing note <span>— the job that has to happen EVERY day this group is handled. The floor gets it on the board every morning with its own ✓, and it comes back the next day.</span></h4>
+    <textarea id="gnote" class="gstanding" maxlength="200" placeholder="e.g. check the temp log on every pallet (optional)"></textarea>
+
+    <h4>Daily note <span>— pick the date on the calendar, write the note, and that's what the floor reads that day only.</span></h4>
     <div class="gcal-nav">
       <button type="button" class="cal-navbtn" id="gdprev" title="Previous month">‹</button>
       <h5 id="gdtitle"></h5>
@@ -471,11 +502,44 @@
       }
     });
 
+    // Every note on every group: the standing jobs first (they have no date, so
+    // they sort ahead of everything), then the dated notes from today forward in
+    // date order, then anything still on the retired weekly plan. Past dates are
+    // left out — this is here to answer "what has the floor already been told",
+    // and last week's pickup no longer answers it.
+    function renderWritten(currentId) {
+      const today = ymd(new Date());
+      const rows = [];
+      for (const g of (O.groups || [])) {
+        if (g.note) rows.push({ id: g.id, name: g.name, when: 'every day', order: '', text: g.note });
+        for (const [d, t] of Object.entries(g.dates || {})) {
+          if (d >= today) {
+            rows.push({ id: g.id, name: g.name, order: d, text: t,
+              when: fromYmd(d).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) });
+          }
+        }
+        for (const [k, label] of DAYS) {
+          if (g.plan && g.plan[k]) rows.push({ id: g.id, name: g.name, when: 'every ' + label, order: '', text: g.plan[k] });
+        }
+      }
+      rows.sort((a, b) => (a.order === b.order ? a.name.localeCompare(b.name) : a.order < b.order ? -1 : 1));
+      $('gwrittencount').textContent = rows.length ? `${rows.length} note${rows.length === 1 ? '' : 's'}` : '';
+      $('gwritten').innerHTML = rows.length
+        ? rows.map((r) => `<div class="gw-row${r.id === currentId ? ' gw-mine' : ''}">
+            <span class="gw-name">${esc(r.name)}</span>
+            <span class="gw-when">${esc(r.when)}</span>
+            <span class="gw-text">${esc(r.text)}</span>
+            ${r.id === currentId ? '<span class="gw-tag">this group</span>' : ''}
+          </div>`).join('')
+        : '<div class="gw-none">Nothing written on any group right now.</div>';
+    }
+
     function openEditor(id) {
       const g = id != null ? (O.groups || []).find((x) => x.id === id) : null;
       EDIT_ID = g ? g.id : null;
       $('gtitle').textContent = g ? `Edit "${g.name}"` : 'New group';
       $('gname').value = g ? g.name : '';
+      $('gnote').value = (g && g.note) || '';
       $('gerrbox').textContent = '';
       $('gdel').classList.toggle('hidden', !g);
       CHOSEN = new Set(g ? g.items : []);
@@ -500,6 +564,7 @@
       DCAL_MONTH = now.getMonth();
       DCAL_SELECTED = ymd(now); // today pre-picked: writing today's note is one step
       renderDateCal();
+      renderWritten(EDIT_ID);
       $('gmodal').classList.add('on');
     }
     const closeEditor = () => $('gmodal').classList.remove('on');
@@ -523,7 +588,8 @@
       // notes it still held were materialized into `dates` when the editor opened.
       const res = await fetch(url, {
         method: EDIT_ID != null ? 'PUT' : 'POST',
-        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, items, plan: {}, dates }),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, items, plan: {}, dates, note: $('gnote').value.trim() }),
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok) { $('gerrbox').textContent = j.error || 'Could not save.'; return; }
@@ -738,7 +804,7 @@
         // hiding stock that exists, and saying otherwise would be a lie.
         const here = new Set(products.map((p) => p.item));
         const missing = g.items.filter((c) => !here.has(c)).sort(cmpStr);
-        return Object.assign({ id: g.id, name: g.name, plan: planOf(g), dates: g.dates || {},
+        return Object.assign({ id: g.id, name: g.name, plan: planOf(g), dates: g.dates || {}, note: g.note || '',
           total: g.items.length, products, missing, filtered: filtering }, foldPallets(mine));
       }).filter((g) => !filtering || g.products.length)
         .sort((a, b) => cmpStr(a.name, b.name));
@@ -938,17 +1004,18 @@
           </tr>` + (!open ? '' : `
           <tr class="lsub" data-grpsub="${g.id}"><td colspan="7">
             ${(() => {
-              // The group's notes, repeated on its own line: upcoming dated
-              // notes, plus any legacy weekly-plan ones a resave hasn't
-              // migrated yet — someone reading All inventory shouldn't have to
-              // scroll up to the board to learn what's scheduled.
+              // The group's notes, repeated on its own line: the standing note,
+              // upcoming dated notes, plus any legacy weekly-plan ones a resave
+              // hasn't migrated yet — someone reading All inventory shouldn't
+              // have to scroll up to the board to learn what's scheduled.
               const today = ymd(new Date());
               const up = Object.entries(g.dates || {}).filter(([d]) => d >= today)
                 .sort((a, b) => (a[0] < b[0] ? -1 : 1)).slice(0, 5);
               const wk = DAYS.filter(([k]) => g.plan && g.plan[k]);
-              if (!up.length && !wk.length) return '';
+              if (!up.length && !wk.length && !g.note) return '';
               const fmtD = (d) => fromYmd(d).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
               return `<div class="weekplan">${[
+                ...(g.note ? [`<span class="d">every day</span> ${esc(g.note)}`] : []),
                 ...up.map(([d, t]) => `<span class="d">${esc(fmtD(d))}</span> ${esc(t)}`),
                 ...wk.map(([k, label]) => `<span class="d">every ${label}</span> ${esc(g.plan[k])}`),
               ].join('   ·   ')}</div>`;
