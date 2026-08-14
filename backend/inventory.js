@@ -220,6 +220,22 @@ function status() {
   };
 }
 
+// Which item codes currently have stock anywhere in the snapshot.
+//
+// Exists so a caller can answer "is this group empty?" without running the
+// whole overview() aggregation — the Today board asks that of every group on
+// every poll, and it has no business paying for pallet folding to do it.
+// Memoised against builtAt: the answer only changes when a pull lands.
+let onHandCache = { builtAt: null, set: new Set() };
+function itemsOnHand() {
+  if (onHandCache.builtAt !== snap.builtAt) {
+    const set = new Set();
+    for (const rows of snap.byLocation.values()) for (const r of rows) set.add(r.item);
+    onHandCache = { builtAt: snap.builtAt, set };
+  }
+  return onHandCache.set;
+}
+
 // Typeahead: prefix matches first, then substring, capped.
 function searchLocations(q, limit = 50) {
   q = String(q || '').trim().toUpperCase();
@@ -482,4 +498,4 @@ function start() {
   if (timer.unref) timer.unref();
 }
 
-module.exports = { start, refresh, status, searchLocations, getLocation, overview };
+module.exports = { start, refresh, status, searchLocations, getLocation, overview, itemsOnHand };

@@ -138,6 +138,15 @@ kept off the week strip and the month calendar — it lands on all seven days
 identically, and printing it there would bury the dated work those views exist to
 show; the strip states it once, as `plus N standing jobs every day`.
 
+A task is a group and a date; **nothing about it is wired to the stock**, so scanning
+the pallets out does not clear it — only the ✓ does. That gap is what made finished
+work look outstanding, so a task whose group has **nothing on hand** now says so on the
+row. It's amber, not red: an empty group usually means the job is already done and
+gone. Today's and carried-over rows only — on a future date an empty group means
+nothing, because stock still has time to arrive — and the marker is absent, never
+false, until the first snapshot lands, so a cold start can't accuse every group of
+being empty.
+
 "Today" is the **viewer's** day: the board is read standing in front of a screen on
 the floor, so every date sent to the API comes from that browser.
 
@@ -161,9 +170,13 @@ read from. It therefore carries an **Already written** panel: every note on ever
 — standing ones first, then dated from today forward — with the group being edited
 marked *this group*. Writing a note never has to depend on remembering the rest.
 
-Ticks and notes live in `data/today-board.json` and age out on their own: ticks after
-21 days, notes after 120. The carry-over looks back seven days, inside that retention,
-so a task can never outlive the ✓ that would have cleared it.
+Everything here ages out on its own. Ticks and day-notes live in
+`data/today-board.json` — ticks go after 21 days, notes after 120. A group's **dated
+notes** go after 30 (`data/product-groups.json`, pruned on boot and on every write);
+without that, a group given a new date every week accumulates a permanent list of
+finished jobs, and the editor shows every one of them as though it were still pending.
+Future dates are never pruned. The carry-over looks back seven days, inside the tick
+retention, so a task can never outlive the ✓ that would have cleared it.
 
 ## The requests channel
 

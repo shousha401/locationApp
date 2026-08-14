@@ -112,6 +112,11 @@
     .tb-every { font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:.09em;
       color:var(--muted); border:1px solid var(--line); background:var(--bg);
       padding:3px 9px; border-radius:999px; white-space:nowrap; }
+    /* Amber, not red: an empty group usually means the job is already done and
+       shipped, which is good news — it is not a fault to be alarmed about. */
+    .tb-gone { font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:.09em;
+      color:var(--warn); border:1px solid rgba(251,191,36,.4); background:rgba(251,191,36,.09);
+      padding:3px 9px; border-radius:999px; white-space:nowrap; }
     .tb-cap2 { font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:.11em;
       color:var(--muted); margin:16px 0 8px; }
 
@@ -499,10 +504,20 @@
     // The "every day" chip is what separates a standing rule from today's own
     // work at a glance — without it the floor can't tell which lines are the
     // reason today is different.
+    //
+    // "nothing on hand" answers the complaint behind all of this: a task is a
+    // group and a date, with no connection to stock, so scanning the pallets
+    // out leaves the job sitting there looking undone. The app knows the group
+    // is empty; saying so beats making someone walk out and check. Tested
+    // `=== false` on purpose — the field is absent until a snapshot exists, and
+    // absent must not read as empty. Only today's and carried-over rows get it
+    // (the week strip builds its own markup): on a future date an empty group
+    // means nothing, because stock still has time to arrive.
     const taskBody = (t) => `
       <span class="tb-g">${esc(t.g.name)}</span><span class="tb-arrow">→</span>
       <span class="tb-n">${esc(t.text)}</span>
-      ${t.standing ? '<span class="tb-every">every day</span>' : ''}`;
+      ${t.standing ? '<span class="tb-every">every day</span>' : ''}
+      ${t.g.onHand === false ? '<span class="tb-gone">nothing on hand</span>' : ''}`;
 
     EL.innerHTML = `<div class="tb">
       <div class="tb-top">

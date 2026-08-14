@@ -32,6 +32,17 @@ const MAX_NAME = 60;
 const MAX_ITEMS = 300;
 const MAX_NOTE = 200;
 const MAX_DATES = 366; // a year's worth of one-off notes is plenty; a safety cap, not a product limit
+
+// How long a dated note is kept after its day has passed.
+//
+// Nothing used to drop these, so a group given a new date every week grew a
+// permanent list of finished jobs — and the editor showed all of them, which
+// reads as work still outstanding. (It went unnoticed while a save silently
+// wiped the whole map; fixing that turned an accidental purge into real
+// accumulation.) Sits between today.js's two clocks: ticks at 21 days, day
+// notes at 120. Future dates are never touched — writing next month's pickup
+// today is the normal way this gets used.
+const KEEP_DATE_DAYS = 30;
 const DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -64,7 +75,34 @@ function persist() {
   }
 }
 
+// Server-local cutoff, used only to decide what has aged out. Dates are ISO, so
+// a string compare is a date compare.
+function cutoff(days) {
+  const d = new Date();
+  d.setDate(d.getDate() - days);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+// Drop dated notes whose day is more than KEEP_DATE_DAYS behind us. Returns the
+// count so the caller can skip a pointless rewrite of the file.
+function pruneDates() {
+  const cut = cutoff(KEEP_DATE_DAYS);
+  let dropped = 0;
+  for (const g of groups) {
+    if (!g.dates) continue;
+    for (const d of Object.keys(g.dates)) {
+      if (d < cut) { delete g.dates[d]; dropped++; }
+    }
+  }
+  return dropped;
+}
+
 load();
+// Boot is the one moment a long-lived process is guaranteed to re-read the
+// clock, so an install that sits untouched for a month still tidies itself.
+// Every write prunes too (see create/update), the same way today.js does.
+if (pruneDates()) persist();
 
 const cleanName = (s) => String(s || '').trim().slice(0, MAX_NAME);
 // Item codes as they appear in Swarmbox ('062065'); dedupe, drop blanks.
@@ -123,6 +161,7 @@ function create(name, items, plan, dates, note, who) {
   const standing = cleanNote(note);
   if (standing) rec.note = standing; // absent rather than empty, so `g.note` alone answers "has one"
   groups.push(rec);
+  pruneDates();
   persist();
   return rec;
 }
@@ -152,6 +191,7 @@ function update(id, patch, who) {
   }
   g.updatedBy = who || null;
   g.updatedAt = new Date().toISOString();
+  pruneDates();
   persist();
   return g;
 }

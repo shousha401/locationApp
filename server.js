@@ -75,7 +75,19 @@ const groupResult = (res, r, who, verb) => {
     + `${r.note ? ', standing note' : ''})`);
   res.json(r);
 };
-app.get('/api/groups', (_req, res) => res.json({ groups: groups.list(), days: groups.DAYS }));
+// Each group carries `onHand`: does any of its items have stock right now. The
+// Today board prints "nothing on hand" beside a task from it, because a job
+// whose pallets already left is the single most confusing thing that can sit on
+// that board — the floor scanned it out and the task stayed, so it reads as
+// undone work. Deliberately ABSENT (not false) until the first snapshot lands:
+// an empty index would otherwise mark every group empty and cry wolf on boot.
+app.get('/api/groups', (_req, res) => {
+  const onHand = inventory.status().ok ? inventory.itemsOnHand() : null;
+  const list = onHand
+    ? groups.list().map((g) => ({ ...g, onHand: g.items.some((c) => onHand.has(c)) }))
+    : groups.list();
+  res.json({ groups: list, days: groups.DAYS });
+});
 app.post('/api/groups', auth.requireEditor, (req, res) => {
   const b = req.body || {};
   groupResult(res, groups.create(b.name, b.items, b.plan, b.dates, b.note, req.user.username), req.user.username, 'created');
