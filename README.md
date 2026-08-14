@@ -40,7 +40,8 @@ slightly-stale, never blank.
 - `backend/requests.js` — the build-queue thread (`data/requests.json`).
 - `backend/groups.js` — manager-named product groups (`data/product-groups.json`), each
   carrying a `note` (the standing job, no date), `dates` (a note per exact calendar
-  date) and a retired `plan` (a note per weekday). See **The Today board** below.
+  date) and a retired `plan` (a note per weekday). A group may be a **one-off job**
+  rather than a product family — see below. Details in **The Today board**.
 - `backend/today.js` — the Today board's own state (`data/today-board.json`): done
   ticks and the manager's note for the day, both keyed by calendar date.
 - `public/today.js` — the Today board itself, shared by the feed and the dashboard so
@@ -137,6 +138,28 @@ tick, so it expires overnight and the job is back the next morning. It's deliber
 kept off the week strip and the month calendar — it lands on all seven days
 identically, and printing it there would bury the dated work those views exist to
 show; the strip states it once, as `plus N standing jobs every day`.
+
+### Families and one-off jobs
+
+A group matches stock by **item code** and nothing else — not a pallet, not a serial,
+not a receipt date. For a product family that is exactly right: *Grassfed beef* should
+pick up the next delivery. For a job it is wrong: *Bellies for bacon* is this week's
+batch, and when it ships the job is over — but the next pallet of the same code used to
+rejoin the finished group and put it back in front of the floor.
+
+Ticking **One-off job** in the editor marks the second kind. Two bits of state drive it:
+
+- `seenStock` — **armed.** A job created before its pallets land must not close on the
+  spot merely for never having had any.
+- `closedAt` — **shipped.** Once armed and then empty, the job closes: it stops matching
+  stock, drops off the board, and shows as `shipped` in the group list.
+
+Nothing reopens itself — "the code came back" is precisely the event this exists to
+ignore — so a closed job stays closed until someone presses **Reopen**, which re-arms it.
+Families are untouched by all of this and keep collecting new stock as they always did.
+State advances on the read paths (`/api/groups`, `/api/overview`) and is skipped
+entirely until a snapshot exists, so an empty index can never read as "everything
+shipped" and close every open job at once.
 
 A task is a group and a date; **nothing about it is wired to the stock**, so scanning
 the pallets out does not clear it — only the ✓ does. That gap is what made finished

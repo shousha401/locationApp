@@ -307,10 +307,16 @@
   // exactly one way. Each task carries its own done-tick `key`: the plain group
   // id for weekly tasks (matches every tick already stored), and a `d:`-prefixed
   // id for one-offs so ticking one never hides the other on the same day.
+  // A CLOSED one-off job is off the board for good — its stock shipped, so its
+  // notes describe work that already happened. Leaving them would put a
+  // finished job back in front of the floor the moment the same item code
+  // arrives again, which is the whole reason closing exists.
+  const live = () => GROUPS.filter((g) => !g.closedAt);
+
   function tasksOnDate(dateStr) {
     const dow = dayKeyOf(dateStr);
     const out = [];
-    for (const g of GROUPS) {
+    for (const g of live()) {
       if (g.plan && g.plan[dow]) out.push({ g, key: String(g.id), text: g.plan[dow], oneOff: false });
       if (g.dates && g.dates[dateStr]) out.push({ g, key: 'd:' + g.id, text: g.dates[dateStr], oneOff: true });
     }
@@ -330,7 +336,7 @@
   // re-entering it. Its `n:` key prefix keeps that tick clear of the weekly
   // (bare id) and one-off (`d:`) ticks for the same group.
   function standingTasks() {
-    return GROUPS.filter((g) => g.note)
+    return live().filter((g) => g.note)
       .map((g) => ({ g, key: 'n:' + g.id, text: g.note, oneOff: false, standing: true }))
       .sort((a, b) => String(a.g.name).localeCompare(String(b.g.name)));
   }

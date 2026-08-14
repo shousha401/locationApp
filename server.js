@@ -57,7 +57,10 @@ app.put('/api/notes/:code', auth.requireEditor, (req, res) => {
 });
 
 // Whole-snapshot aggregates for the dashboard. Served from RAM — costs Swarmbox nothing.
-app.get('/api/overview', (_req, res) => res.json(inventory.overview(groups.list())));
+app.get('/api/overview', (_req, res) => {
+  reconcileJobs();
+  res.json(inventory.overview(groups.list()));
+});
 
 // ── Product groups ───────────────────────────────────────────────────────────
 // Managers (editor+) name a set of item codes and, per group, a standing weekly
@@ -72,7 +75,8 @@ const groupResult = (res, r, who, verb) => {
   console.log(`[Groups] ${who} ${verb} '${r.name}' (${r.items.length} items`
     + `${days ? `, notes on ${days} day${days === 1 ? '' : 's'}` : ''}`
     + `${dates ? `, ${dates} one-off date${dates === 1 ? '' : 's'}` : ''}`
-    + `${r.note ? ', standing note' : ''})`);
+    + `${r.note ? ', standing note' : ''}`
+    + `${r.oneOff ? ', one-off job' : ''})`);
   res.json(r);
 };
 // Each group carries `onHand`: does any of its items have stock right now. The
@@ -81,16 +85,37 @@ const groupResult = (res, r, who, verb) => {
 // that board — the floor scanned it out and the task stayed, so it reads as
 // undone work. Deliberately ABSENT (not false) until the first snapshot lands:
 // an empty index would otherwise mark every group empty and cry wolf on boot.
+// Advance one-off jobs against the current snapshot before answering: a job
+// arms when its stock appears and closes when it ships. Done on the read paths
+// because that is the moment the answer is next needed, and it only writes when
+// something actually changed. Skipped entirely until a snapshot exists — an
+// empty index would read as "everything shipped" and close every open job.
+function reconcileJobs() {
+  if (!inventory.status().ok) return null;
+  const onHand = inventory.itemsOnHand();
+  groups.reconcile(onHand);
+  return onHand;
+}
+
 app.get('/api/groups', (_req, res) => {
-  const onHand = inventory.status().ok ? inventory.itemsOnHand() : null;
+  const onHand = reconcileJobs();
   const list = onHand
-    ? groups.list().map((g) => ({ ...g, onHand: g.items.some((c) => onHand.has(c)) }))
+    ? groups.list().map((g) => ({ ...g, onHand: !g.closedAt && g.items.some((c) => onHand.has(c)) }))
     : groups.list();
   res.json({ groups: list, days: groups.DAYS });
 });
+
+// Put a closed job back to work. Editors only, like every other write here.
+app.post('/api/groups/:id/reopen', auth.requireEditor, (req, res) => {
+  const r = groups.reopen(req.params.id, req.user.username);
+  if (!r) return res.status(404).json({ error: 'No such group' });
+  if (r.error) return res.status(400).json({ error: r.error });
+  console.log(`[Groups] ${req.user.username} reopened '${r.name}'`);
+  res.json(r);
+});
 app.post('/api/groups', auth.requireEditor, (req, res) => {
   const b = req.body || {};
-  groupResult(res, groups.create(b.name, b.items, b.plan, b.dates, b.note, req.user.username), req.user.username, 'created');
+  groupResult(res, groups.create(b, req.user.username), req.user.username, 'created');
 });
 app.put('/api/groups/:id', auth.requireEditor, (req, res) => {
   groupResult(res, groups.update(req.params.id, req.body || {}, req.user.username), req.user.username, 'updated');

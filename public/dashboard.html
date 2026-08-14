@@ -150,6 +150,27 @@
       border-radius:9px; border:1px solid var(--line); background:var(--panel2); color:var(--text); }
     .gstanding:focus { outline:none; border-color:var(--accent); }
 
+    /* "shipped" vs merely empty: without this a closed job and a group that
+       happens to have nothing on hand today read identically in the list, which
+       is the confusion the whole one-off idea exists to remove. */
+    .gshipped, .gjobchip { display:inline-block; margin-left:7px; padding:1px 8px; border-radius:999px;
+      font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:.06em; vertical-align:middle; }
+    .gshipped { color:var(--warn); border:1px solid rgba(251,191,36,.42); background:rgba(251,191,36,.1); }
+    .gjobchip { color:var(--muted); border:1px solid var(--line); background:var(--bg); }
+
+    .gjob { display:flex; gap:9px; align-items:flex-start; margin-top:14px; padding:10px 12px;
+      border:1px solid var(--line); border-radius:9px; background:var(--panel2);
+      font-size:12px; line-height:1.45; color:var(--muted); cursor:pointer; }
+    .gjob input { margin-top:2px; flex:0 0 auto; }
+    .gjob b { color:var(--text); }
+    .gclosed { margin-top:8px; padding:10px 12px; border-radius:9px; font-size:12px;
+      border:1px solid rgba(251,191,36,.4); background:rgba(251,191,36,.08); color:var(--warn);
+      display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+    .gclosed b { color:var(--warn); }
+    .gclosed button { margin-left:auto; padding:5px 13px; border-radius:999px; cursor:pointer;
+      border:1px solid var(--line); background:var(--bg); color:var(--text); font-size:12px; }
+    .gclosed button:hover { border-color:var(--accent); color:var(--accent); }
+
     /* "Already written": the editor is a modal, so opening it covers the board
        and the group list it was read from. Without this the only place to check
        what the floor has already been told is memory. */
@@ -260,6 +281,11 @@
     <input type="text" id="gname" placeholder="Group name — what the floor calls these" maxlength="60">
     <div class="zones" id="gpicktabs" style="margin-bottom:9px"></div>
     <div class="picklist" id="gpick"></div>
+    <label class="gjob"><input type="checkbox" id="goneoff">
+      <span><b>One-off job</b> — this is a batch, not a product family. It closes itself once its stock
+      ships, and a later delivery of the same item code will <b>not</b> rejoin it.</span></label>
+    <div class="gclosed hidden" id="gclosed"></div>
+
     <h4 class="gwhead">Already written <span>— every note on every group, so writing one never depends on
       remembering the rest.</span><span class="gwcount" id="gwrittencount"></span></h4>
     <div class="gwritten" id="gwritten"></div>
@@ -534,12 +560,39 @@
         : '<div class="gw-none">Nothing written on any group right now.</div>';
     }
 
+    // A closed job says so, with the date it shipped and the way back. Reopening
+    // is deliberately a separate button rather than a side effect of unticking
+    // the box: "this was a job" and "start it again" are different decisions.
+    function renderClosed(g) {
+      const box = $('gclosed');
+      box.classList.toggle('hidden', !(g && g.closedAt));
+      if (!(g && g.closedAt)) return;
+      const when = new Date(g.closedAt);
+      box.innerHTML = `<span><b>Closed</b> — its stock shipped
+        ${isNaN(when) ? '' : 'on ' + esc(when.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }))}.
+        New stock of these codes will not rejoin it, and it is off the floor's board.</span>
+        <button type="button" id="greopen">Reopen</button>`;
+      $('greopen').addEventListener('click', async () => {
+        const res = await fetch('/api/groups/' + g.id + '/reopen', { method: 'POST' });
+        if (!res.ok) {
+          const j = await res.json().catch(() => ({}));
+          $('gerrbox').textContent = j.error || 'Could not reopen.';
+          return;
+        }
+        await load();
+        openEditor(g.id);           // redraw the editor against the reopened group
+        TodayBoard.refresh(true);   // and put its notes back on the board
+      });
+    }
+
     function openEditor(id) {
       const g = id != null ? (O.groups || []).find((x) => x.id === id) : null;
       EDIT_ID = g ? g.id : null;
       $('gtitle').textContent = g ? `Edit "${g.name}"` : 'New group';
       $('gname').value = g ? g.name : '';
       $('gnote').value = (g && g.note) || '';
+      $('goneoff').checked = !!(g && g.oneOff);
+      renderClosed(g);
       $('gerrbox').textContent = '';
       $('gdel').classList.toggle('hidden', !g);
       CHOSEN = new Set(g ? g.items : []);
@@ -589,7 +642,8 @@
       const res = await fetch(url, {
         method: EDIT_ID != null ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, items, plan: {}, dates, note: $('gnote').value.trim() }),
+        body: JSON.stringify({ name, items, plan: {}, dates,
+          note: $('gnote').value.trim(), oneOff: $('goneoff').checked }),
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok) { $('gerrbox').textContent = j.error || 'Could not save.'; return; }
@@ -805,6 +859,7 @@
         const here = new Set(products.map((p) => p.item));
         const missing = g.items.filter((c) => !here.has(c)).sort(cmpStr);
         return Object.assign({ id: g.id, name: g.name, plan: planOf(g), dates: g.dates || {}, note: g.note || '',
+          oneOff: !!g.oneOff, closedAt: g.closedAt || null,
           total: g.items.length, products, missing, filtered: filtering }, foldPallets(mine));
       }).filter((g) => !filtering || g.products.length)
         .sort((a, b) => cmpStr(a.name, b.name));
@@ -992,6 +1047,8 @@
         return `
           <tr class="click grp" data-grp="${g.id}">
             <td><span class="caret">${open ? '▾' : '▸'}</span><span class="gname">${esc(g.name)}</span>
+              ${g.closedAt ? '<span class="gshipped" title="This job closed when its stock shipped. New stock of these codes will not rejoin it.">shipped</span>'
+                : (g.oneOff ? '<span class="gjobchip" title="A one-off job: it closes itself once its stock ships.">job</span>' : '')}
               ${isMgr ? `<button class="gedit" data-edit="${g.id}">edit</button>`
                 + `<button class="gedit gx" data-del="${g.id}" title="Remove the group '${esc(g.name)}' — the products themselves stay">✕</button>` : ''}
               <div class="desc" style="padding-left:11px">${codeList(g)}</div></td>

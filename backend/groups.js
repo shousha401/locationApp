@@ -144,22 +144,68 @@ function cleanDates(obj) {
   return out;
 }
 
+// ── One-off jobs ─────────────────────────────────────────────────────────────
+// A group matches stock by ITEM CODE and nothing else — not a pallet, not a
+// serial, not a receipt date. That is right for a product family ("Grassfed
+// beef" should pick up the next delivery), and wrong for a job ("Bellies for
+// bacon" is this week's batch). Without a way to tell them apart, shipping a
+// job out empties its group and the NEXT delivery of the same code silently
+// rejoins it, putting a finished job back in front of the floor.
+//
+// `oneOff` marks the second kind. Two bits of state drive it:
+//   seenStock — armed. A one-off created before its pallets land must not close
+//               on the spot merely for never having had any.
+//   closedAt  — shipped. Once armed and then empty, the job is over: it stops
+//               matching stock and drops off the board, until someone reopens
+//               it by hand. Nothing reopens itself, because "the code came back"
+//               is exactly the event this exists to ignore.
+function reconcile(hasStock) {
+  let changed = false;
+  for (const g of groups) {
+    if (!g.oneOff || g.closedAt) continue;
+    const on = g.items.some((c) => hasStock.has(c));
+    if (on && !g.seenStock) { g.seenStock = true; changed = true; }
+    else if (!on && g.seenStock) { g.closedAt = new Date().toISOString(); changed = true; }
+  }
+  if (changed) persist();
+  return changed;
+}
+
+// Put a closed job back to work — and re-arm it, so it has to see its stock
+// again before it can close a second time.
+function reopen(id, who) {
+  const g = get(id);
+  if (!g) return null;
+  if (!g.closedAt) return { error: 'That job is not closed' };
+  delete g.closedAt;
+  delete g.seenStock;
+  g.updatedBy = who || null;
+  g.updatedAt = new Date().toISOString();
+  persist();
+  return g;
+}
+
 const list = () => groups.slice();
 const get = (id) => groups.find((g) => g.id === Number(id)) || null;
 const nameTaken = (name, exceptId) => groups.some(
   (g) => g.id !== exceptId && g.name.toLowerCase() === name.toLowerCase());
 
-function create(name, items, plan, dates, note, who) {
-  name = cleanName(name);
-  items = cleanItems(items);
+// Takes a fields object rather than a row of positional arguments — there are
+// six of them now, and `create(name, items, plan, dates, note, oneOff, who)` is
+// a bug waiting for someone to transpose two. Mirrors update(id, patch, who).
+function create(fields, who) {
+  const f = fields || {};
+  const name = cleanName(f.name);
+  const items = cleanItems(f.items);
   if (!name) return { error: 'Group needs a name' };
   if (!items.length) return { error: 'Pick at least one product' };
   if (nameTaken(name, null)) return { error: `A group called '${name}' already exists` };
   const id = groups.reduce((m, g) => Math.max(m, g.id), 0) + 1;
-  const rec = { id, name, items, plan: cleanPlan(plan), dates: cleanDates(dates),
+  const rec = { id, name, items, plan: cleanPlan(f.plan), dates: cleanDates(f.dates),
     updatedBy: who || null, updatedAt: new Date().toISOString() };
-  const standing = cleanNote(note);
+  const standing = cleanNote(f.note);
   if (standing) rec.note = standing; // absent rather than empty, so `g.note` alone answers "has one"
+  if (f.oneOff) rec.oneOff = true;
   groups.push(rec);
   pruneDates();
   persist();
@@ -188,6 +234,15 @@ function update(id, patch, who) {
     const standing = cleanNote(patch.note);
     if (standing) g.note = standing;
     else delete g.note; // clearing the box is how a manager retires a standing job
+  }
+  // Only a real change of kind resets the job state — the editor sends `oneOff`
+  // on every save, and re-saving a closed job to fix its name must not quietly
+  // reopen it.
+  if (patch.oneOff !== undefined && !!patch.oneOff !== !!g.oneOff) {
+    if (patch.oneOff) g.oneOff = true;
+    else delete g.oneOff;
+    delete g.seenStock;
+    delete g.closedAt;
   }
   g.updatedBy = who || null;
   g.updatedAt = new Date().toISOString();
@@ -221,4 +276,4 @@ function remove(id) {
   return g;
 }
 
-module.exports = { list, get, create, update, clearDay, remove, DAYS };
+module.exports = { list, get, create, update, clearDay, remove, reconcile, reopen, DAYS };
