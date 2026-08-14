@@ -30,6 +30,10 @@
     .badge.viewer { background:#0b2a3b; color:var(--accent); border:1px solid #14415a; }
     a.navlink { color:var(--accent); text-decoration:none; font-size:12px; }
     button.link { background:none; border:0; color:var(--muted); cursor:pointer; font-size:12px; text-decoration:underline; }
+    .refreshbtn { padding:4px 11px; border-radius:999px; border:1px solid var(--line);
+      background:var(--bg); color:var(--muted); cursor:pointer; font-size:12px; white-space:nowrap; }
+    .refreshbtn:hover:not([disabled]) { border-color:var(--accent); color:var(--accent); }
+    .refreshbtn[disabled] { opacity:.55; cursor:default; }
 
     /* Wider than the dashboard's 1180: this is the floor's screen, and the
        week strip below the tasks wants every pixel of a warehouse monitor. */
@@ -177,6 +181,7 @@
   <header>
     <h1>📍 Location Feed</h1>
     <div class="status"><span class="dot" id="dot"></span><span id="statusText">connecting…</span></div>
+    <button class="refreshbtn" id="refreshNow" title="Pull from Swarmbox now instead of waiting for the next 15-minute refresh">⟳ Refresh</button>
     <div class="grow"></div>
     <a class="navlink" href="/dashboard.html">📊 Dashboard</a>
     <a class="navlink" href="/requests.html">💬 Requests</a>
@@ -597,6 +602,40 @@
       }
       btn.textContent = 'Save';
     }
+
+    // Pull now rather than waiting out the 15-minute cycle — for the moment
+    // after someone scans stock out and wants the screen to agree with the
+    // floor. The server starts the pull and answers immediately, so this
+    // watches /api/status rather than holding a request open for 10-15s.
+    $('refreshNow').addEventListener('click', async () => {
+      const btn = $('refreshNow');
+      const label = btn.textContent;
+      const before = (await (await fetch('/api/status')).json()).builtAt;
+      btn.disabled = true;
+      btn.textContent = '⟳ refreshing…';
+      let failed = false;
+      try {
+        const res = await fetch('/api/refresh', { method: 'POST' });
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok) { failed = true; btn.textContent = j.error || 'Could not refresh'; return; }
+        for (let i = 0; i < 30; i++) {                     // ~45s ceiling
+          await new Promise((r) => setTimeout(r, 1500));
+          const s = await (await fetch('/api/status')).json();
+          if (!s.building && String(s.builtAt) !== String(before)) break;
+        }
+        await refreshStatus();
+        if (CURRENT && !DIRTY) loadLocation(CURRENT, true);
+        loadAllNotes();
+        TodayBoard.refresh(true);
+      } catch (_) {
+        failed = true;
+        btn.textContent = 'Could not refresh';
+      } finally {
+        // An error message needs a moment to be read; a success does not — the
+        // fresh numbers are already on screen, so give the button straight back.
+        setTimeout(() => { btn.textContent = label; btn.disabled = false; }, failed ? 2500 : 0);
+      }
+    });
 
     // ── Boot ───────────────────────────────────────────────────────────────────
     $('logout').addEventListener('click', async () => {

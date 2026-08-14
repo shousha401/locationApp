@@ -35,6 +35,32 @@ app.get('/api/session', (req, res) => res.json({ username: req.user.username, ro
 // Snapshot health — the page shows "data as of …" and a building/stale banner.
 app.get('/api/status', (_req, res) => res.json(inventory.status()));
 
+// Pull from Swarmbox NOW, instead of waiting out the rest of the 15-minute
+// cycle. This is the answer to "I scanned it out and the screen still shows
+// it": the app is a snapshot, not a live feed, and this is the button that
+// makes it agree with the floor on demand.
+//
+// Rate-limited GLOBALLY rather than per user — the cost lands on Swarmbox, and
+// it does not care which of us asked. Kicked off without awaiting, because the
+// pull takes 10-15s and a request held open that long just invites a timeout
+// somewhere; the page watches /api/status to see it land. refresh() already
+// ignores a call made while one is in flight.
+let lastManualRefresh = 0;
+const MANUAL_REFRESH_MS = 30000;
+app.post('/api/refresh', (req, res) => {
+  const since = Date.now() - lastManualRefresh;
+  if (since < MANUAL_REFRESH_MS) {
+    return res.status(429).json({
+      error: `Just refreshed — try again in ${Math.ceil((MANUAL_REFRESH_MS - since) / 1000)}s`,
+      ...inventory.status(),
+    });
+  }
+  lastManualRefresh = Date.now();
+  console.log(`[Inventory] manual refresh requested by ${req.user.username}`);
+  inventory.refresh().catch((e) => console.error('[Inventory] manual refresh threw:', e && e.message));
+  res.json({ started: true, ...inventory.status() });
+});
+
 // Location typeahead. ?q= filters; returns matches + snapshot status.
 app.get('/api/locations', (req, res) => {
   res.json({ ...inventory.status(), matches: inventory.searchLocations(req.query.q, 50) });

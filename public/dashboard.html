@@ -26,7 +26,32 @@
     a.navlink { color:var(--accent); text-decoration:none; font-size:12px; }
     button.link { background:none; border:0; color:var(--muted); cursor:pointer; font-size:12px; text-decoration:underline; }
 
-    .wrap { max-width:1180px; margin:0 auto; padding:20px; }
+    /* 1180 left ~420px of a 1600px monitor unused while All inventory scrolled
+       sideways to show its last column. The table wants ~1165px, so anything
+       from here up fits it whole on any screen worth running this on. */
+    .wrap { max-width:1500px; margin:0 auto; padding:20px; }
+
+    .refreshbtn { padding:4px 11px; border-radius:999px; border:1px solid var(--line);
+      background:var(--bg); color:var(--muted); cursor:pointer; font-size:12px; white-space:nowrap; }
+    .refreshbtn:hover:not([disabled]) { border-color:var(--accent); color:var(--accent); }
+    .refreshbtn[disabled] { opacity:.55; cursor:default; }
+
+    /* Every cell is nowrap so numbers and codes never break mid-token, but the
+       product description is the one column wide enough to push the table past
+       the screen. Letting just that wrap is what keeps All inventory whole on a
+       narrow laptop instead of scrolling sideways to reach Weight. */
+    #inv .desc { white-space:normal; }
+    #inv td:first-child { max-width:320px; }
+    /* Location holds up to two codes plus a "+N"; it wraps at the separators.
+       Safe to unset nowrap here — bin codes contain no spaces, so one can never
+       be broken across lines. */
+    #inv td.mono { white-space:normal; }
+
+    /* All locations is reference, not something anyone reads daily, so it stays
+       folded until asked for — All inventory gets the page instead. */
+    .foldcard > h2 { cursor:pointer; }
+    .foldcard > h2 .caret { color:var(--muted); margin-right:7px; font-size:11px; }
+    .foldcard.folded > .foldbody { display:none; }
     .banner { margin:0 0 16px; padding:10px 14px; border-radius:9px; font-size:13px;
       background:var(--panel2); border:1px solid var(--line); color:var(--muted); }
     .banner b { color:var(--text); }
@@ -235,6 +260,7 @@
   <header>
     <h1>📊 Dashboard</h1>
     <div class="status"><span class="dot" id="dot"></span><span id="statusText">loading…</span></div>
+    <button class="refreshbtn" id="refreshNow" title="Pull from Swarmbox now instead of waiting for the next 15-minute refresh">⟳ Refresh</button>
     <div class="grow"></div>
     <a class="navlink" href="/">📍 Feed</a>
     <a class="navlink" href="/requests.html">💬 Requests</a>
@@ -265,14 +291,16 @@
       <div class="more hidden" id="invMore"></div>
     </div>
 
-    <div class="card">
-      <h2>All locations <span class="count" id="locCount"></span></h2>
-      <div class="filter">
-        <div class="zones" id="zones"></div>
-        <input id="locFilter" placeholder="Filter locations — e.g. Z2" autocomplete="off">
-        <div class="selsum" id="selSum"></div>
+    <div class="card foldcard folded" id="locCard">
+      <h2 id="locHead"><span class="caret">▸</span>All locations <span class="count" id="locCount"></span></h2>
+      <div class="foldbody">
+        <div class="filter">
+          <div class="zones" id="zones"></div>
+          <input id="locFilter" placeholder="Filter locations — e.g. Z2" autocomplete="off">
+          <div class="selsum" id="selSum"></div>
+        </div>
+        <div class="scroll"><table id="locs"></table></div>
       </div>
-      <div class="scroll"><table id="locs"></table></div>
     </div>
   </div>
 
@@ -630,6 +658,43 @@
       else setZoom(false);
     });
     $('newGroup').addEventListener('click', () => openEditor(null));
+
+    $('locHead').addEventListener('click', () => {
+      const card = $('locCard');
+      card.classList.toggle('folded');
+      card.querySelector('.caret').textContent = card.classList.contains('folded') ? '▸' : '▾';
+    });
+
+    // Pull now rather than waiting out the 15-minute cycle. The server starts
+    // the pull and answers immediately, so this watches /api/status for the new
+    // snapshot instead of holding a request open for the 10-15s it takes.
+    $('refreshNow').addEventListener('click', async () => {
+      const btn = $('refreshNow');
+      const before = O && O.builtAt ? String(O.builtAt) : '';
+      btn.disabled = true;
+      const label = btn.textContent;
+      btn.textContent = '⟳ refreshing…';
+      let failed = false;
+      try {
+        const res = await fetch('/api/refresh', { method: 'POST' });
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok) { failed = true; btn.textContent = j.error || 'Could not refresh'; return; }
+        for (let i = 0; i < 30; i++) {                     // ~45s ceiling
+          await new Promise((r) => setTimeout(r, 1500));
+          const s = await (await fetch('/api/status')).json();
+          if (!s.building && String(s.builtAt) !== before) break;
+        }
+        await load();
+        TodayBoard.refresh(true);
+      } catch (_) {
+        failed = true;
+        btn.textContent = 'Could not refresh';
+      } finally {
+        // An error message needs a moment to be read; a success does not — the
+        // fresh numbers are already on screen, so give the button straight back.
+        setTimeout(() => { btn.textContent = label; btn.disabled = false; }, failed ? 2500 : 0);
+      }
+    });
 
     $('gsave').addEventListener('click', async () => {
       const name = $('gname').value.trim();

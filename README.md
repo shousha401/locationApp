@@ -18,8 +18,11 @@ the **Today board** (below), so signing in starts with what has to happen today:
   (editors pick items, name the set, and watch it as one line — with a red count;
   a grouped product reads under its group and is no longer listed on its own; a
   group with nothing on hand folds away behind a counted "N groups with nothing on
-  hand · show" line, and editors get **✕** on any group row to remove it), and
-  a clickable **all-locations** table with one-tap zone buttons.
+  hand · show" line, and editors get **✕** on any group row to remove it). **All
+  inventory** gets the width — the page runs to 1500px and its one wide column (the
+  product description) wraps, so the table fits whole instead of scrolling sideways
+  to reach Weight. The **all-locations** table is still there, with its one-tap zone
+  buttons, but folded away behind its heading: it's reference, not a daily read.
 - **💬 Requests** (`/requests.html`) — the app's build queue. Users write what they
   want the app to show; the build side reads the thread and ships it. Seeded with
   interview questions on first run.
@@ -33,6 +36,13 @@ inventory (~250k rows / 6.5k locations) every few minutes, indexes it by locatio
 RAM, and serves every location instantly from that snapshot. A failed pull keeps the
 last good snapshot (with a visible "as of" stamp), so a Swarmbox blip degrades to
 slightly-stale, never blank.
+
+Because it is a snapshot and not a live feed, stock scanned out keeps showing until
+the next pull — up to `SNAPSHOT_REFRESH_MS` later. **⟳ Refresh** in the header of both
+pages closes that gap on demand: it starts a pull and answers immediately (the pull
+takes 10–15s for GT), and the page watches `/api/status` for the new snapshot rather
+than holding a request open. Rate-limited to one manual pull every 30s **globally**,
+not per user — the cost lands on Swarmbox, which doesn't care which of us asked.
 
 - `backend/swarmbox.js` — PostgREST client (retries, circuit breaker, timeouts), lifted from valueTool.
 - `backend/inventory.js` — the snapshot: pull → index by location; also the dashboard's `overview()` aggregates.
