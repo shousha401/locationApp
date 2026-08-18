@@ -851,6 +851,13 @@
     // point of folding them away — and kept outside the render so the 60s
     // refresh doesn't shut them again while a manager is working in there.
     let GRP_EMPTY_OPEN = false;
+    // Which groups are showing the codes that have left GT. Off by default:
+    // once its stock is out of the building an item is not "in" the group in
+    // any sense the floor cares about, and printing it on every row is what
+    // made scanned-out stock look like it was still sitting there. The count
+    // stays on screen and one click brings the codes back, because "which of
+    // my four is missing" is still a real question — just not the default one.
+    const GRP_GONE_OPEN = new Set();
     // Pallet IDs read as "017 633 246" but get typed without spaces.
     const squash = (s) => String(s || '').toUpperCase().replace(/\s+/g, '');
 
@@ -1153,7 +1160,11 @@
                 <td>${chips(i.states)}</td>
                 <td class="num">${wStr(asArr(i.cases))}</td>
                 <td class="num">${wStr(asArr(i.weight))}</td></tr>`).join('')}
-              ${g.missing.map((c) => `
+              ${!g.missing.length ? '' : `
+                <tr class="gone"><td colspan="7"><button class="link" data-gone="${g.id}">
+                  ${fmtInt(g.missing.length)} ${gonePhrase(g)}
+                  · ${GRP_GONE_OPEN.has(g.id) ? 'hide' : 'show'}</button></td></tr>`}
+              ${!GRP_GONE_OPEN.has(g.id) ? '' : g.missing.map((c) => `
                 <tr class="gone"><td><span class="mono">${esc(c)}</span>
                   <span class="desc">${esc(descOf(c))}</span></td>
                 <td class="num">0</td><td colspan="5">${gonePhrase(g)}</td></tr>`).join('')}</tbody></table>`
@@ -1213,6 +1224,13 @@
     $('inv').addEventListener('click', (e) => {
       if (e.target.closest('a')) return;
       if (e.target.closest('#grpEmptyToggle')) { GRP_EMPTY_OPEN = !GRP_EMPTY_OPEN; renderInventory(); return; }
+      const gone = e.target.closest('[data-gone]');
+      if (gone) {
+        const id = Number(gone.dataset.gone);
+        if (GRP_GONE_OPEN.has(id)) GRP_GONE_OPEN.delete(id); else GRP_GONE_OPEN.add(id);
+        renderInventory();
+        return;
+      }
       const ed = e.target.closest('[data-edit]');
       if (ed) { openEditor(Number(ed.dataset.edit)); return; }
       const del = e.target.closest('[data-del]');
