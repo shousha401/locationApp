@@ -21,7 +21,7 @@ the **Today board** (below), so signing in starts with what has to happen today:
   hand · show" line, and editors get **✕** on any group row to remove it). Inside a
   group, an item whose stock has **left GT** stops being listed — it folds behind its
   own "N not on hand · show" line, so a group shows what is actually in the building
-  rather than every code it was ever defined with). **All
+  rather than every code it was ever defined with. **All
   inventory** gets the width — the page runs to 1500px and its one wide column (the
   product description) wraps, so the table fits whole instead of scrolling sideways
   to reach Weight. The **all-locations** table is still there, with its one-tap zone
