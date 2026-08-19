@@ -122,6 +122,14 @@ const groupResult = (res, r, who, verb) => {
 function reconcileJobs() {
   if (!inventory.status().ok) return null;
   const onHand = inventory.itemsOnHand();
+  // A snapshot with NOTHING on hand is a Swarmbox glitch until proven
+  // otherwise — GT is never actually bare. Advancing jobs against it would
+  // close every armed group in one tick (and closes don't undo themselves),
+  // so it's treated exactly like having no snapshot at all.
+  if (!onHand.size) {
+    console.warn('[Groups] reconcile skipped: snapshot reads completely empty — not closing anything');
+    return null;
+  }
   groups.reconcile(onHand);
   return onHand;
 }

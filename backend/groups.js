@@ -204,8 +204,18 @@ function reconcile(hasStock) {
   for (const g of groups) {
     if (g.family || g.closedAt) continue;
     const on = g.items.some((c) => hasStock.has(c));
-    if (on && !g.seenStock) { g.seenStock = true; changed = true; }
-    else if (!on && g.seenStock) { g.closedAt = new Date().toISOString(); changed = true; }
+    // Both transitions are logged: "when did the app decide this shipped" has
+    // to be answerable from the server log, not reconstructed from memory —
+    // the close is automatic and the floor will ask.
+    if (on && !g.seenStock) {
+      g.seenStock = true;
+      changed = true;
+      console.log(`[Groups] job '${g.name}' armed — its stock is on hand`);
+    } else if (!on && g.seenStock) {
+      g.closedAt = new Date().toISOString();
+      changed = true;
+      console.log(`[Groups] job '${g.name}' closed itself — the snapshot shows no stock left of ${g.items.join('/')}`);
+    }
   }
   if (changed) persist();
   return changed;
