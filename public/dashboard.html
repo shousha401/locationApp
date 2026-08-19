@@ -501,9 +501,22 @@
     let CHOSEN = new Set();
     let PICK_TAB = 'products';
 
+    // The on-hand products no OPEN group claims — the picker's version of All
+    // inventory's "Not in a group" tab (that one counts pallets; a picker picks
+    // products). The group being edited doesn't count as claiming: its own
+    // items must keep showing here, ticked, not read as somebody else's.
+    function unassignedProducts() {
+      const claimed = new Set((GROUPS || [])
+        .filter((g) => !g.closedAt && g.id !== EDIT_ID)
+        .flatMap((g) => g.items));
+      return (O.allProducts || []).filter((p) => !claimed.has(p.item));
+    }
+
     function renderPickTabs() {
       const n = mixedPalletGroups(INV).length;
+      const u = unassignedProducts().length;
       $('gpicktabs').innerHTML = `
+        <button type="button" class="zbtn ${PICK_TAB === 'unassigned' ? 'on' : ''}" data-picktab="unassigned">Not in a group${u ? ` · ${fmtInt(u)}` : ''}</button>
         <button type="button" class="zbtn ${PICK_TAB === 'products' ? 'on' : ''}" data-picktab="products">All products</button>
         <button type="button" class="zbtn ${PICK_TAB === 'mixed' ? 'on' : ''}" data-picktab="mixed">⚠ Mixed pallets${n ? ` · ${fmtInt(n)}` : ''}</button>`;
     }
@@ -525,19 +538,28 @@
         }).join('') : '<div class="pick"><span class="desc">No pallet currently carries more than one product.</span></div>';
         return;
       }
-      // Pick from every product in the snapshot; keep chosen codes that have
-      // rotated out of GT so editing a group never silently drops them.
-      const known = new Set((O.allProducts || []).map((p) => p.item));
-      const extras = [...CHOSEN].filter((c) => !known.has(c));
       // Products that share a pallet with something else — flagged here so a
       // manager building a group notices before picking, not after.
       const mixedItems = new Set(mixedPalletGroups(INV).flatMap((mg) => mg.items.map((p) => p.item)));
-      $('gpick').innerHTML = (O.allProducts || []).map((p) => `
+      const row = (p) => `
         <label class="pick"><input type="checkbox" value="${esc(p.item)}" ${CHOSEN.has(p.item) ? 'checked' : ''}>
           <span class="mono">${esc(p.item)}</span>
           ${mixedItems.has(p.item) ? '<span class="mixflag" title="Shares a pallet with another product — see the ⚠ Mixed pallets tab">⚠</span>' : ''}
           <span class="desc">${esc(p.description)}</span>
-          <span class="desc">${fmtInt(p.pallets)} plt</span></label>`).join('')
+          <span class="desc">${fmtInt(p.pallets)} plt</span></label>`;
+      if (PICK_TAB === 'unassigned') {
+        // Only the unclaimed stock — the list a new group is usually built
+        // from, which is why openEditor() starts a NEW group on this tab.
+        const un = unassignedProducts();
+        $('gpick').innerHTML = un.length ? un.map(row).join('')
+          : '<div class="pick"><span class="desc">Every product on hand is already in a group — the All products tab shows everything.</span></div>';
+        return;
+      }
+      // Pick from every product in the snapshot; keep chosen codes that have
+      // rotated out of GT so editing a group never silently drops them.
+      const known = new Set((O.allProducts || []).map((p) => p.item));
+      const extras = [...CHOSEN].filter((c) => !known.has(c));
+      $('gpick').innerHTML = (O.allProducts || []).map(row).join('')
         + extras.map((c) => `
         <label class="pick"><input type="checkbox" value="${esc(c)}" checked>
           <span class="mono">${esc(c)}</span><span class="desc">not in GT right now</span></label>`).join('');
@@ -642,7 +664,10 @@
       // closes at all.
       $('gclose').classList.toggle('hidden', !g || !!g.closedAt || !!g.family);
       CHOSEN = new Set(g ? g.items : []);
-      PICK_TAB = 'products';
+      // A NEW group is almost always built from the unclaimed stock, so start
+      // there (when there is any). Editing starts on All products, where the
+      // group's current items are guaranteed to be in view.
+      PICK_TAB = (!g && unassignedProducts().length) ? 'unassigned' : 'products';
       renderPick();
       // Copied rather than aliased so editing here can't touch g.dates before Save.
       DATE_NOTES = { ...(g && g.dates) };

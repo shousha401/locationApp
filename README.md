@@ -26,7 +26,9 @@ the **Today board** (below), so signing in starts with what has to happen today:
   wait in a **Done** fold for a week and then delete themselves — see
   **Jobs close when they ship** below. A **Not in a group** tab lists every pallet
   no open group claims (assign an item to a group and its pallets leave the list),
-  which is where returning stock reads until a manager gives it a job. **All
+  which is where returning stock reads until a manager gives it a job — and the
+  group editor's pick list opens on exactly that unclaimed set when creating a
+  new group, since that list is what new groups get built from. **All
   inventory** gets the width — the page runs to 1500px and its one wide column (the
   product description) wraps, so the table fits whole instead of scrolling sideways
   to reach Weight. The **all-locations** table is still there, with its one-tap zone
