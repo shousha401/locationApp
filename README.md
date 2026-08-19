@@ -22,7 +22,8 @@ the **Today board** (below), so signing in starts with what has to happen today:
   group, an item whose stock has **left GT** stops being listed — it folds behind its
   own "N not on hand · show" line, so a group shows what is actually in the building
   rather than every code it was ever defined with. Groups **close themselves when
-  their stock ships** and stock that comes back does *not* rejoin them — see
+  their stock ships** and stock that comes back does *not* rejoin them; finished jobs
+  wait in a **Done** fold for a week and then delete themselves — see
   **Jobs close when they ship** below. A **Not in a group** tab lists every pallet
   no open group claims (assign an item to a group and its pallets leave the list),
   which is where returning stock reads until a manager gives it a job. **All
@@ -187,14 +188,17 @@ The editor also carries **Close job now** for the other direction: end a job on 
 spot — usually because its stock came back and is reading under work that already
 happened — without waiting for a snapshot to call it empty.
 
-A closed job also **deletes itself 30 days after it closed**, so finishing a job every
-week doesn't grow the "groups with nothing on hand" fold forever. Thirty, not less, on
-purpose: it sits above the 21-day done-tick retention (group ids can be reused after a
-delete, and this gap means a new group can never inherit an old group's ticks), and it
-leaves a month to notice a wrong close and press Reopen. An **empty** group that never
-closed is left alone — empty usually means its stock hasn't landed yet, and its dated
-notes are still real scheduled work. Editors can of course still delete any group by
-hand at any time (✕ on its row, or **Delete group** in the editor), stock or no stock.
+A closed job lands in the dashboard's **Done** fold — its own counted line under the
+groups ("N done · show"), newest close first, every row stating when it closed and when
+it deletes itself — and **removes itself 7 days after it closed**: long enough to see
+what shipped and catch a wrong close with Reopen, short enough that finishing a job
+every week doesn't grow the list forever. The row's ✕ deletes it sooner by hand. An
+**empty** group that never closed is left alone — empty usually means its stock hasn't
+landed yet, and its dated notes are still real scheduled work. Editors can of course
+still delete any group at any time (✕ on its row, or **Delete group** in the editor),
+stock or no stock. (Reused group ids can't resurrect old done-ticks: a closed job can't
+be ticked at all, so by deletion day every tick against that id is itself a week old —
+at the far edge of the board's own carry-over window.)
 State advances on the read paths (`/api/groups`, `/api/overview`) and is skipped
 entirely until a snapshot exists, so an empty index can never read as "everything
 shipped" and close every open job at once.
@@ -233,7 +237,8 @@ marked *this group*. Writing a note never has to depend on remembering the rest.
 
 Everything here ages out on its own. Ticks and day-notes live in
 `data/today-board.json` — ticks go after 21 days, notes after 120. **Closed jobs**
-delete themselves 30 days after closing (see above). A group's **dated
+sit in the dashboard's Done fold and delete themselves 7 days after closing (see
+above). A group's **dated
 notes** go after 30 (`data/product-groups.json`, pruned on boot and on every write);
 without that, a group given a new date every week accumulates a permanent list of
 finished jobs, and the editor shows every one of them as though it were still pending.

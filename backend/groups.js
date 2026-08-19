@@ -44,16 +44,16 @@ const MAX_DATES = 366; // a year's worth of one-off notes is plenty; a safety ca
 // today is the normal way this gets used.
 const KEEP_DATE_DAYS = 30;
 
-// How long a CLOSED job is kept before it deletes itself. Closing already took
-// it off the board and out of the stock match, so after a month its "shipped"
-// row is answering a question nobody is still asking — and without a clock the
-// fold of quiet groups grows by one for every job the floor ever finishes.
-// Deliberately ABOVE today.js's 21-day tick retention: create() hands out
-// max(id)+1, so a pruned group's id can be reused, and this gap guarantees any
-// ticks recorded against the old id are gone before a new group can inherit
-// them. A month is also plenty of time to notice a job closed wrongly and
-// press Reopen — deletion is the one step here with no way back.
-const KEEP_CLOSED_DAYS = 30;
+// How long a CLOSED job sits in the dashboard's Done list before it deletes
+// itself. A week: long enough to see what shipped and to catch a wrong close
+// with Reopen, short enough that finishing a job every week doesn't grow the
+// list forever — and the ✕ on the row deletes it sooner by hand. Reusing a
+// dead group's id (create() hands out max+1) can't resurrect its done-ticks in
+// practice: a closed job can't be ticked at all — it is off the board from the
+// moment it closes — so by deletion day every tick against that id is itself a
+// week old, and a new group would need a note back-dated a full week for one
+// of those to ever surface on the board's carry-over.
+const KEEP_CLOSED_DAYS = 7;
 const DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -335,4 +335,4 @@ function remove(id) {
   return g;
 }
 
-module.exports = { list, get, create, update, clearDay, remove, reconcile, close, reopen, DAYS };
+module.exports = { list, get, create, update, clearDay, remove, reconcile, close, reopen, DAYS, KEEP_CLOSED_DAYS };

@@ -83,9 +83,11 @@ app.put('/api/notes/:code', auth.requireEditor, (req, res) => {
 });
 
 // Whole-snapshot aggregates for the dashboard. Served from RAM — costs Swarmbox nothing.
+// closedKeepDays rides along so the dashboard's Done list can say when a
+// finished job will remove itself without hardcoding the server's clock.
 app.get('/api/overview', (_req, res) => {
   reconcileJobs();
-  res.json(inventory.overview(groups.list()));
+  res.json({ ...inventory.overview(groups.list()), closedKeepDays: groups.KEEP_CLOSED_DAYS });
 });
 
 // ── Product groups ───────────────────────────────────────────────────────────
