@@ -43,6 +43,17 @@ const MAX_DATES = 366; // a year's worth of one-off notes is plenty; a safety ca
 // notes at 120. Future dates are never touched — writing next month's pickup
 // today is the normal way this gets used.
 const KEEP_DATE_DAYS = 30;
+
+// How long a CLOSED job is kept before it deletes itself. Closing already took
+// it off the board and out of the stock match, so after a month its "shipped"
+// row is answering a question nobody is still asking — and without a clock the
+// fold of quiet groups grows by one for every job the floor ever finishes.
+// Deliberately ABOVE today.js's 21-day tick retention: create() hands out
+// max(id)+1, so a pruned group's id can be reused, and this gap guarantees any
+// ticks recorded against the old id are gone before a new group can inherit
+// them. A month is also plenty of time to notice a job closed wrongly and
+// press Reopen — deletion is the one step here with no way back.
+const KEEP_CLOSED_DAYS = 30;
 const DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -99,11 +110,28 @@ function pruneDates() {
   return dropped;
 }
 
+// Drop closed jobs whose closedAt is more than KEEP_CLOSED_DAYS behind us.
+// closedAt is an ISO timestamp, so its date part compares fine against
+// cutoff()'s YYYY-MM-DD. Called from boot and from reconcile() — NEVER from
+// create/update, which hold a reference to one specific group: pruning under
+// an edit could delete the very group being saved and persist without it.
+function pruneClosed() {
+  const cut = cutoff(KEEP_CLOSED_DAYS);
+  let dropped = 0;
+  groups = groups.filter((g) => {
+    if (!g.closedAt || String(g.closedAt).slice(0, 10) >= cut) return true;
+    console.log(`[Groups] closed job '${g.name}' aged out (closed ${String(g.closedAt).slice(0, 10)})`);
+    dropped++;
+    return false;
+  });
+  return dropped;
+}
+
 load();
 // Boot is the one moment a long-lived process is guaranteed to re-read the
 // clock, so an install that sits untouched for a month still tidies itself.
-// Every write prunes too (see create/update), the same way today.js does.
-if (pruneDates()) persist();
+// Every write prunes dates too (see create/update), the same way today.js does.
+if (pruneDates() + pruneClosed()) persist();
 
 const cleanName = (s) => String(s || '').trim().slice(0, MAX_NAME);
 // Item codes as they appear in Swarmbox ('062065'); dedupe, drop blanks.
@@ -169,7 +197,10 @@ function cleanDates(obj) {
 //   closedBy  — only set by a MANUAL close (see close()), so the editor can say
 //               who ended the job instead of claiming its stock shipped.
 function reconcile(hasStock) {
-  let changed = false;
+  // Aging out closed jobs rides the same clock tick: reconcile runs on every
+  // read path, which is what keeps "30 days" meaning 30 days rather than
+  // "whenever the process next restarts".
+  let changed = pruneClosed() > 0;
   for (const g of groups) {
     if (g.family || g.closedAt) continue;
     const on = g.items.some((c) => hasStock.has(c));

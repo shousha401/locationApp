@@ -186,6 +186,15 @@ ignore — so a closed job stays closed until someone presses **Reopen**, which 
 The editor also carries **Close job now** for the other direction: end a job on the
 spot — usually because its stock came back and is reading under work that already
 happened — without waiting for a snapshot to call it empty.
+
+A closed job also **deletes itself 30 days after it closed**, so finishing a job every
+week doesn't grow the "groups with nothing on hand" fold forever. Thirty, not less, on
+purpose: it sits above the 21-day done-tick retention (group ids can be reused after a
+delete, and this gap means a new group can never inherit an old group's ticks), and it
+leaves a month to notice a wrong close and press Reopen. An **empty** group that never
+closed is left alone — empty usually means its stock hasn't landed yet, and its dated
+notes are still real scheduled work. Editors can of course still delete any group by
+hand at any time (✕ on its row, or **Delete group** in the editor), stock or no stock.
 State advances on the read paths (`/api/groups`, `/api/overview`) and is skipped
 entirely until a snapshot exists, so an empty index can never read as "everything
 shipped" and close every open job at once.
@@ -223,7 +232,8 @@ read from. It therefore carries an **Already written** panel: every note on ever
 marked *this group*. Writing a note never has to depend on remembering the rest.
 
 Everything here ages out on its own. Ticks and day-notes live in
-`data/today-board.json` — ticks go after 21 days, notes after 120. A group's **dated
+`data/today-board.json` — ticks go after 21 days, notes after 120. **Closed jobs**
+delete themselves 30 days after closing (see above). A group's **dated
 notes** go after 30 (`data/product-groups.json`, pruned on boot and on every write);
 without that, a group given a new date every week accumulates a permanent list of
 finished jobs, and the editor shows every one of them as though it were still pending.
