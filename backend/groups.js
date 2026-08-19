@@ -46,7 +46,8 @@ const KEEP_DATE_DAYS = 30;
 const DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-let groups = []; // [{ id, name, items:[codes], plan:{day:dest}, dates:{date:note}, updatedBy, updatedAt }]
+let groups = []; // [{ id, name, items:[codes], plan:{day:dest}, dates:{date:note},
+                 //    family?, seenStock?, closedAt?, closedBy?, updatedBy, updatedAt }]
 
 function load() {
   let raw;
@@ -144,31 +145,55 @@ function cleanDates(obj) {
   return out;
 }
 
-// ── One-off jobs ─────────────────────────────────────────────────────────────
+// ── Jobs close when they ship ────────────────────────────────────────────────
 // A group matches stock by ITEM CODE and nothing else — not a pallet, not a
-// serial, not a receipt date. That is right for a product family ("Grassfed
-// beef" should pick up the next delivery), and wrong for a job ("Bellies for
-// bacon" is this week's batch). Without a way to tell them apart, shipping a
-// job out empties its group and the NEXT delivery of the same code silently
-// rejoins it, putting a finished job back in front of the floor.
+// serial, not a receipt date. Left alone that means the NEXT arrival of the
+// same code silently rejoins a group whose work already shipped — scan a job
+// out, receive the item back, and the finished job is back in front of the
+// floor as though nothing happened. That rejoin was the single most confusing
+// thing groups did, so closing is now the DEFAULT, not an opt-in:
 //
-// `oneOff` marks the second kind. Two bits of state drive it:
-//   seenStock — armed. A one-off created before its pallets land must not close
+//   default   — a JOB. It closes itself once its stock ships, and stock that
+//               comes back does NOT rejoin it — it reads as unassigned until a
+//               manager puts it in a group on purpose.
+//   `family`  — the opt-in for a real product family ("Grassfed beef" should
+//               pick up the next delivery). It never closes itself.
+//
+// Two bits of state drive the closing:
+//   seenStock — armed. A job created before its pallets land must not close
 //               on the spot merely for never having had any.
 //   closedAt  — shipped. Once armed and then empty, the job is over: it stops
 //               matching stock and drops off the board, until someone reopens
 //               it by hand. Nothing reopens itself, because "the code came back"
 //               is exactly the event this exists to ignore.
+//   closedBy  — only set by a MANUAL close (see close()), so the editor can say
+//               who ended the job instead of claiming its stock shipped.
 function reconcile(hasStock) {
   let changed = false;
   for (const g of groups) {
-    if (!g.oneOff || g.closedAt) continue;
+    if (g.family || g.closedAt) continue;
     const on = g.items.some((c) => hasStock.has(c));
     if (on && !g.seenStock) { g.seenStock = true; changed = true; }
     else if (!on && g.seenStock) { g.closedAt = new Date().toISOString(); changed = true; }
   }
   if (changed) persist();
   return changed;
+}
+
+// End a job NOW instead of waiting for the snapshot to read it empty — the
+// answer to "its stock came back and is sitting under a finished job". Unlike
+// reconcile()'s close the stock may well still be on hand, so it records who
+// did it rather than letting the editor claim the stock shipped.
+function close(id, who) {
+  const g = get(id);
+  if (!g) return null;
+  if (g.closedAt) return { error: 'That job is already closed' };
+  g.closedAt = new Date().toISOString();
+  g.closedBy = who || null;
+  g.updatedBy = who || null;
+  g.updatedAt = g.closedAt;
+  persist();
+  return g;
 }
 
 // Put a closed job back to work — and re-arm it, so it has to see its stock
@@ -178,6 +203,7 @@ function reopen(id, who) {
   if (!g) return null;
   if (!g.closedAt) return { error: 'That job is not closed' };
   delete g.closedAt;
+  delete g.closedBy;
   delete g.seenStock;
   g.updatedBy = who || null;
   g.updatedAt = new Date().toISOString();
@@ -191,7 +217,7 @@ const nameTaken = (name, exceptId) => groups.some(
   (g) => g.id !== exceptId && g.name.toLowerCase() === name.toLowerCase());
 
 // Takes a fields object rather than a row of positional arguments — there are
-// six of them now, and `create(name, items, plan, dates, note, oneOff, who)` is
+// six of them now, and `create(name, items, plan, dates, note, family, who)` is
 // a bug waiting for someone to transpose two. Mirrors update(id, patch, who).
 function create(fields, who) {
   const f = fields || {};
@@ -205,7 +231,7 @@ function create(fields, who) {
     updatedBy: who || null, updatedAt: new Date().toISOString() };
   const standing = cleanNote(f.note);
   if (standing) rec.note = standing; // absent rather than empty, so `g.note` alone answers "has one"
-  if (f.oneOff) rec.oneOff = true;
+  if (f.family) rec.family = true;
   groups.push(rec);
   pruneDates();
   persist();
@@ -235,14 +261,16 @@ function update(id, patch, who) {
     if (standing) g.note = standing;
     else delete g.note; // clearing the box is how a manager retires a standing job
   }
-  // Only a real change of kind resets the job state — the editor sends `oneOff`
+  // Only a real change of kind resets the job state — the editor sends `family`
   // on every save, and re-saving a closed job to fix its name must not quietly
-  // reopen it.
-  if (patch.oneOff !== undefined && !!patch.oneOff !== !!g.oneOff) {
-    if (patch.oneOff) g.oneOff = true;
-    else delete g.oneOff;
+  // reopen it. A real flip does reset: marking a closed job as a family puts
+  // its stock back on the books, and un-marking a family arms it fresh.
+  if (patch.family !== undefined && !!patch.family !== !!g.family) {
+    if (patch.family) g.family = true;
+    else delete g.family;
     delete g.seenStock;
     delete g.closedAt;
+    delete g.closedBy;
   }
   g.updatedBy = who || null;
   g.updatedAt = new Date().toISOString();
@@ -276,4 +304,4 @@ function remove(id) {
   return g;
 }
 
-module.exports = { list, get, create, update, clearDay, remove, reconcile, reopen, DAYS };
+module.exports = { list, get, create, update, clearDay, remove, reconcile, close, reopen, DAYS };

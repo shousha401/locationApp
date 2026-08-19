@@ -167,6 +167,9 @@
     .gsave { background:var(--accent); color:#04222f; }
     .gcancel { background:none; border:1px solid var(--line) !important; color:var(--muted); }
     .gdelete { background:none; border:1px solid var(--err) !important; color:var(--err); }
+    /* Amber, not red: closing a job is the normal end of its life, where delete
+       is the destructive odd one out — the two must not read as siblings. */
+    .gclosebtn { background:none; border:1px solid rgba(251,191,36,.55) !important; color:var(--warn); }
     .gerr { color:var(--err); font-size:12px; margin-top:8px; min-height:16px; }
     .gsheet h4 { margin:16px 0 8px; font-size:11px; color:var(--muted);
       text-transform:uppercase; letter-spacing:.06em; }
@@ -309,9 +312,10 @@
     <input type="text" id="gname" placeholder="Group name — what the floor calls these" maxlength="60">
     <div class="zones" id="gpicktabs" style="margin-bottom:9px"></div>
     <div class="picklist" id="gpick"></div>
-    <label class="gjob"><input type="checkbox" id="goneoff">
-      <span><b>One-off job</b> — this is a batch, not a product family. It closes itself once its stock
-      ships, and a later delivery of the same item code will <b>not</b> rejoin it.</span></label>
+    <label class="gjob"><input type="checkbox" id="gfamily">
+      <span><b>Product family</b> — keeps collecting: every <b>new</b> delivery of these item codes joins
+      this group automatically, and it never closes itself. Leave this OFF for a normal job — a job closes
+      once its stock ships, and stock that comes back does <b>not</b> rejoin it.</span></label>
     <div class="gclosed hidden" id="gclosed"></div>
 
     <h4 class="gwhead">Already written <span>— every note on every group, so writing one never depends on
@@ -336,6 +340,8 @@
     <div class="gerr" id="gerrbox"></div>
     <div class="gactions">
       <button class="gdelete hidden" id="gdel">Delete group</button>
+      <button class="gclosebtn hidden" id="gclose"
+        title="End this job now — stock of these codes stops reading under it, and stock that comes back will not rejoin. Reopen anytime.">Close job now</button>
       <div class="grow"></div>
       <button class="gcancel" id="gcancel">Cancel</button>
       <button class="gsave" id="gsave">Save</button>
@@ -364,10 +370,12 @@
         .map((p) => `<span class="mono">${esc(p.item)}</span>`).join(' · ');
       const rest = g.products.length - Math.min(g.products.length, GRP_CODES_SHOWN);
       // Nothing to list: say it once, with the size of the group, rather than
-      // pairing an empty list with a count of what's missing from it.
+      // pairing an empty list with a count of what's missing from it. A closed
+      // job says closed, not "none on hand" — its codes may well be on hand,
+      // just no longer its business.
       if (!shown) {
         return `<i>${fmtInt(g.total)} product${g.total === 1 ? '' : 's'} · `
-          + `${g.filtered ? 'none shown' : 'none on hand'}</i>`;
+          + `${g.closedAt ? 'closed' : (g.filtered ? 'none shown' : 'none on hand')}</i>`;
       }
       return shown
         + (rest ? ` +${fmtInt(rest)} more` : '')
@@ -565,6 +573,9 @@
       const today = ymd(new Date());
       const rows = [];
       for (const g of (O.groups || [])) {
+        // A closed job is off the board, so nothing written on it is in front
+        // of the floor — listing it here would say the opposite.
+        if (g.closedAt) continue;
         if (g.note) rows.push({ id: g.id, name: g.name, when: 'every day', order: '', text: g.note });
         for (const [d, t] of Object.entries(g.dates || {})) {
           if (d >= today) {
@@ -596,9 +607,12 @@
       box.classList.toggle('hidden', !(g && g.closedAt));
       if (!(g && g.closedAt)) return;
       const when = new Date(g.closedAt);
-      box.innerHTML = `<span><b>Closed</b> — its stock shipped
+      // A manual close records who did it; the automatic one means the stock
+      // shipped. Saying "shipped" about a job someone closed with the stock
+      // still on the floor would be a lie the reader can walk out and disprove.
+      box.innerHTML = `<span><b>Closed</b> — ${g.closedBy ? `${esc(g.closedBy)} ended this job` : 'its stock shipped'}
         ${isNaN(when) ? '' : 'on ' + esc(when.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }))}.
-        New stock of these codes will not rejoin it, and it is off the floor's board.</span>
+        Stock of these codes does not read under it, and it is off the floor's board.</span>
         <button type="button" id="greopen">Reopen</button>`;
       $('greopen').addEventListener('click', async () => {
         const res = await fetch('/api/groups/' + g.id + '/reopen', { method: 'POST' });
@@ -619,10 +633,14 @@
       $('gtitle').textContent = g ? `Edit "${g.name}"` : 'New group';
       $('gname').value = g ? g.name : '';
       $('gnote').value = (g && g.note) || '';
-      $('goneoff').checked = !!(g && g.oneOff);
+      $('gfamily').checked = !!(g && g.family);
       renderClosed(g);
       $('gerrbox').textContent = '';
       $('gdel').classList.toggle('hidden', !g);
+      // Close-now is for an EXISTING, OPEN job: a new group has nothing to
+      // close, a closed one gets the Reopen banner instead, and a family never
+      // closes at all.
+      $('gclose').classList.toggle('hidden', !g || !!g.closedAt || !!g.family);
       CHOSEN = new Set(g ? g.items : []);
       PICK_TAB = 'products';
       renderPick();
@@ -708,7 +726,7 @@
         method: EDIT_ID != null ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, items, plan: {}, dates,
-          note: $('gnote').value.trim(), oneOff: $('goneoff').checked }),
+          note: $('gnote').value.trim(), family: $('gfamily').checked }),
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok) { $('gerrbox').textContent = j.error || 'Could not save.'; return; }
@@ -731,6 +749,25 @@
     }
     $('gdel').addEventListener('click', async () => {
       if (EDIT_ID != null && await removeGroup(EDIT_ID)) closeEditor();
+    });
+    // End the job now, without waiting for its stock to read as shipped — the
+    // button for "the item came back and is sitting under a finished job".
+    $('gclose').addEventListener('click', async () => {
+      const g = EDIT_ID != null ? (O.groups || []).find((x) => x.id === EDIT_ID) : null;
+      if (!g) return;
+      if (!confirm(`Close "${g.name}" now?\n\n`
+        + 'The job is over: it comes off the board, and stock of its item codes — on hand or '
+        + 'arriving later — reads under "Not in a group" instead of under this job. '
+        + 'You can reopen it from this editor anytime.')) return;
+      const res = await fetch('/api/groups/' + g.id + '/close', { method: 'POST' });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        $('gerrbox').textContent = j.error || 'Could not close.';
+        return;
+      }
+      closeEditor();
+      await load();
+      TodayBoard.refresh(true); // its tasks come off the board with it
     });
 
     // One-tap zone buttons, derived from the codes themselves (GT.2 → GT.2.Z1 …)
@@ -922,7 +959,10 @@
     function namedGroups(rows, filtering) {
       return (GROUPS || []).map((g) => {
         const want = new Set(g.items);
-        const mine = rows.filter((p) => want.has(p.item));
+        // A CLOSED job matches NOTHING — that is what closing means. Without
+        // this the client-side fold happily showed returning stock inside a
+        // job already marked shipped, undoing the whole point of the close.
+        const mine = g.closedAt ? [] : rows.filter((p) => want.has(p.item));
         const products = groupByItem(mine).sort((a, b) => cmpStr(a.item, b.item));
         // Codes in the group with nothing to show — named, not just counted, so
         // "3 of 4" never leaves someone guessing which one is missing. Under a
@@ -931,7 +971,7 @@
         const here = new Set(products.map((p) => p.item));
         const missing = g.items.filter((c) => !here.has(c)).sort(cmpStr);
         return Object.assign({ id: g.id, name: g.name, plan: planOf(g), dates: g.dates || {}, note: g.note || '',
-          oneOff: !!g.oneOff, closedAt: g.closedAt || null,
+          family: !!g.family, closedAt: g.closedAt || null,
           total: g.items.length, products, missing, filtered: filtering }, foldPallets(mine));
       }).filter((g) => !filtering || g.products.length)
         .sort((a, b) => cmpStr(a.name, b.name));
@@ -942,12 +982,27 @@
         `<button class="zbtn ${INV_SORT === k ? 'on' : ''}" data-s="${k}">${esc(label)}</button>`).join('');
     }
 
-    // The mixed-pallet count badges the tab itself, so a manager can tell
-    // there's something to look at before ever switching to it.
+    // Every pallet line whose item code no OPEN group claims — the stock nobody
+    // has assigned a job to. Closed jobs claim nothing (their work is done;
+    // that is exactly why returning stock lands HERE instead of back inside
+    // them), and a family claims like any open group. Group DEFINITIONS decide
+    // this, never what the filter happens to be showing, so a pallet's
+    // assignment can't appear to change as someone types.
+    function ungroupedRows() {
+      const claimed = new Set((GROUPS || []).filter((g) => !g.closedAt).flatMap((g) => g.items));
+      return INV.filter((p) => !claimed.has(p.item));
+    }
+
+    // The counts badge the tabs themselves, so a manager can tell there's
+    // something to look at before ever switching over.
     function renderInvTabs() {
       const n = mixedPalletGroups(INV).length;
+      // Distinct pallet IDs, matching the tab's own headline count — a mixed
+      // pallet with two unclaimed products is one pallet, not two.
+      const u = new Set(ungroupedRows().map((p) => p.pallet).filter(Boolean)).size;
       $('invTabs').innerHTML = `
         <button class="zbtn ${INV_TAB === 'products' ? 'on' : ''}" data-tab="products">All products</button>
+        <button class="zbtn ${INV_TAB === 'ungrouped' ? 'on' : ''}" data-tab="ungrouped">Not in a group${u ? ` · ${fmtInt(u)}` : ''}</button>
         <button class="zbtn ${INV_TAB === 'mixed' ? 'on' : ''}" data-tab="mixed">⚠ Mixed pallets${n ? ` · ${fmtInt(n)}` : ''}</button>`;
     }
     $('invTabs').addEventListener('click', (e) => {
@@ -1037,11 +1092,77 @@
       }
     }
 
+    // Every pallet ID that no group is watching, one row per pallet line —
+    // the answer to "what stock has nobody claimed". Fresh deliveries and
+    // stock that came back after its job closed both land here, and assigning
+    // an item to a group removes its pallets from this list on the spot.
+    // Newest received first, because what just arrived is what needs a home.
+    function renderUngroupedInventory() {
+      const raw = $('invFilter').value.trim().toUpperCase();
+      const q = squash(raw);
+      const all = ungroupedRows();
+      const rows = (q
+        ? all.filter((p) => squash(p.pallet).includes(q) || squash(p.item).includes(q)
+          || p.locations.some((l) => squash(l).includes(q))
+          || String(p.description || '').toUpperCase().includes(raw))
+        : all).slice().sort((a, b) => cmpDate(b.date, a.date) || cmpStr(a.item, b.item) || cmpStr(a.pallet, b.pallet));
+
+      const palletIds = new Set();
+      for (const p of all) if (p.pallet) palletIds.add(p.pallet);
+      $('invCount').textContent = `${fmtInt(palletIds.size)} pallet${palletIds.size === 1 ? '' : 's'} no group is watching`;
+
+      let red = 0; const cases = new Map(), weight = new Map();
+      for (const p of rows) {
+        if (p.red) red++;
+        for (const c of p.cases || []) cases.set(c.uom, (cases.get(c.uom) || 0) + c.qty);
+        for (const w of p.weight || []) weight.set(w.uom, (weight.get(w.uom) || 0) + w.qty);
+      }
+      $('invSum').innerHTML = rows.length
+        ? `Selection: <b>${fmtInt(rows.length)}</b> pallet line${rows.length === 1 ? '' : 's'} · `
+          + `<b>${wStr(asArr(cases))}</b> · <b>${wStr(asArr(weight))}</b>`
+          + (red ? ` · <span class="redcount">${fmtInt(red)} 🔴 over 6 days</span>` : '')
+          + ' · newest received first'
+        : (all.length ? 'Nothing matches that filter.' : 'Every pallet on hand is inside a group.');
+
+      const page = rows.slice(0, INV_SHOWN);
+      const rowHtml = (p) => {
+        const sd = daysSince(p.stateDate);
+        const rd = daysSince(p.date);
+        return `
+          <tr><td class="mono">${esc(p.pallet) || '—'}</td>
+          <td><span class="mono">${esc(p.item)}</span>
+            <div class="desc" style="padding-left:11px">${esc(p.description)}</div></td>
+          <td class="mono">${p.locations.map((l) => `<a href="/?loc=${encodeURIComponent(l)}">${esc(l)}</a>`).join(' · ') || '—'}</td>
+          <td>${p.stateDate ? `<span class="${p.red ? 'since-late' : ''}">${esc(p.stateDate)}${sd != null ? ` (${fmtInt(sd)}d)` : ''}</span>` : '—'}</td>
+          <td>${p.state ? `<span class="chip ${esc(p.state)}${p.red ? ' late' : ''}">${esc(p.state)}</span>` : '—'}${p.date ? `<div class="desc" style="font-size:10px">received ${esc(p.date)}${rd != null ? ` (${fmtInt(rd)}d)` : ''}</div>` : ''}</td>
+          <td class="num">${wStr(p.cases)}</td>
+          <td class="num">${wStr(p.weight)}</td></tr>`;
+      };
+
+      $('inv').innerHTML = `
+        <thead><tr><th>Pallet</th><th>Item</th><th>Location</th><th>Since</th>
+          <th>State · received</th><th class="num">Cases</th><th class="num">Weight</th></tr></thead>
+        <tbody>${page.length ? page.map(rowHtml).join('')
+          : `<tr><td colspan="7" class="empty">${all.length ? 'Nothing matches that filter.'
+            : 'Every pallet on hand is inside a group.'}</td></tr>`}</tbody>`;
+
+      const rest = rows.length - page.length;
+      $('invMore').classList.toggle('hidden', rest <= 0);
+      if (rest > 0) {
+        $('invMore').innerHTML = `Showing ${fmtInt(page.length)} of ${fmtInt(rows.length)} pallet lines.`
+          + `<button data-n="${INV_PAGE}">Show ${fmtInt(Math.min(rest, INV_PAGE))} more</button>`
+          + (rest > INV_PAGE ? '<button data-n="all">Show all</button>' : '');
+      }
+    }
+
     function renderInventory() {
       const mgr = ME.role === 'editor' || ME.role === 'admin';
-      $('newGroup').classList.toggle('hidden', !mgr || INV_TAB !== 'products');
+      // ＋ New group stays available on the ungrouped tab — that list is
+      // precisely where the next group gets born.
+      $('newGroup').classList.toggle('hidden', !mgr || INV_TAB === 'mixed');
       $('invSorts').classList.toggle('hidden', INV_TAB !== 'products');
       if (INV_TAB === 'mixed') return renderMixedInventory();
+      if (INV_TAB === 'ungrouped') return renderUngroupedInventory();
 
       const raw = $('invFilter').value.trim().toUpperCase();
       const q = squash(raw);  // pallet/item/location match ignores spacing
@@ -1119,8 +1240,8 @@
         return `
           <tr class="click grp" data-grp="${g.id}">
             <td><span class="caret">${open ? '▾' : '▸'}</span><span class="gname">${esc(g.name)}</span>
-              ${g.closedAt ? '<span class="gshipped" title="This job closed when its stock shipped. New stock of these codes will not rejoin it.">shipped</span>'
-                : (g.oneOff ? '<span class="gjobchip" title="A one-off job: it closes itself once its stock ships.">job</span>' : '')}
+              ${g.closedAt ? '<span class="gshipped" title="This job is closed. Stock of these codes — returning or on hand — does not read under it.">shipped</span>'
+                : (g.family ? '<span class="gjobchip" title="Product family — every new delivery of these item codes joins it automatically, and it never closes itself.">family</span>' : '')}
               ${isMgr ? `<button class="gedit" data-edit="${g.id}">edit</button>`
                 + `<button class="gedit gx" data-del="${g.id}" title="Remove the group '${esc(g.name)}' — the products themselves stay">✕</button>` : ''}
               <div class="desc" style="padding-left:11px">${codeList(g)}</div></td>
@@ -1168,7 +1289,9 @@
                 <tr class="gone"><td><span class="mono">${esc(c)}</span>
                   <span class="desc">${esc(descOf(c))}</span></td>
                 <td class="num">0</td><td colspan="5">${gonePhrase(g)}</td></tr>`).join('')}</tbody></table>`
-            : '<span class="desc">None of these products are in GT right now.</span>'}
+            : `<span class="desc">${g.closedAt
+              ? 'This job is closed — its codes read under Everything else, the Not in a group tab, or whatever group claims them next.'
+              : 'None of these products are in GT right now.'}</span>`}
           </td></tr>`);
       };
 

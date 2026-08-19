@@ -335,14 +335,14 @@ function overview(groupDefs) {
   const gAgg = (groupDefs || []).map((g) => ({
     id: g.id, name: g.name, items: g.items, plan: g.plan || {},
     dates: g.dates || {}, note: g.note || '',
-    oneOff: !!g.oneOff, closedAt: g.closedAt || null,
+    family: !!g.family, closedAt: g.closedAt || null, closedBy: g.closedBy || null,
     updatedBy: g.updatedBy, updatedAt: g.updatedAt,
     units: 0, pallets: new Set(), redPallets: new Set(), cases: new Map(), weight: new Map(),
     perItem: new Map(), // item -> { units, pallets:Set, cases:Map, weight:Map, red:Set }
   }));
-  // A CLOSED one-off job is left out of the index entirely, so nothing that
-  // arrives from here on counts toward it. That is the point of closing: the
-  // job shipped, and the next pallet of the same item code is somebody else's
+  // A CLOSED job is left out of the index entirely, so nothing that arrives
+  // from here on counts toward it. That is the point of closing: the job
+  // shipped, and the next pallet of the same item code is somebody else's
   // work. It still comes back in the summary below, labelled closed, rather
   // than vanishing — a finished job is a thing you should still be able to see.
   const groupsByItem = new Map();
@@ -466,7 +466,7 @@ function overview(groupDefs) {
     .sort((a, b) => a.name.localeCompare(b.name))
     .map((g) => ({
       id: g.id, name: g.name, items: g.items, plan: g.plan, dates: g.dates, note: g.note,
-      oneOff: g.oneOff, closedAt: g.closedAt,
+      family: g.family, closedAt: g.closedAt, closedBy: g.closedBy,
       updatedBy: g.updatedBy, updatedAt: g.updatedAt,
       presentItems: g.perItem.size, units: g.units, pallets: g.pallets.size,
       redPallets: g.redPallets.size, cases: wArr(g.cases), weight: wArr(g.weight),

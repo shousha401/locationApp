@@ -102,7 +102,7 @@ const groupResult = (res, r, who, verb) => {
     + `${days ? `, notes on ${days} day${days === 1 ? '' : 's'}` : ''}`
     + `${dates ? `, ${dates} one-off date${dates === 1 ? '' : 's'}` : ''}`
     + `${r.note ? ', standing note' : ''}`
-    + `${r.oneOff ? ', one-off job' : ''})`);
+    + `${r.family ? ', family' : ''})`);
   res.json(r);
 };
 // Each group carries `onHand`: does any of its items have stock right now. The
@@ -111,11 +111,12 @@ const groupResult = (res, r, who, verb) => {
 // that board — the floor scanned it out and the task stayed, so it reads as
 // undone work. Deliberately ABSENT (not false) until the first snapshot lands:
 // an empty index would otherwise mark every group empty and cry wolf on boot.
-// Advance one-off jobs against the current snapshot before answering: a job
-// arms when its stock appears and closes when it ships. Done on the read paths
-// because that is the moment the answer is next needed, and it only writes when
-// something actually changed. Skipped entirely until a snapshot exists — an
-// empty index would read as "everything shipped" and close every open job.
+// Advance jobs against the current snapshot before answering: every group that
+// isn't a `family` arms when its stock appears and closes when it ships. Done
+// on the read paths because that is the moment the answer is next needed, and
+// it only writes when something actually changed. Skipped entirely until a
+// snapshot exists — an empty index would read as "everything shipped" and
+// close every open job.
 function reconcileJobs() {
   if (!inventory.status().ok) return null;
   const onHand = inventory.itemsOnHand();
@@ -137,6 +138,15 @@ app.post('/api/groups/:id/reopen', auth.requireEditor, (req, res) => {
   if (!r) return res.status(404).json({ error: 'No such group' });
   if (r.error) return res.status(400).json({ error: r.error });
   console.log(`[Groups] ${req.user.username} reopened '${r.name}'`);
+  res.json(r);
+});
+// End a job now — the manual twin of the automatic close-on-ship, for the job
+// whose stock came back and is reading under work that already happened.
+app.post('/api/groups/:id/close', auth.requireEditor, (req, res) => {
+  const r = groups.close(req.params.id, req.user.username);
+  if (!r) return res.status(404).json({ error: 'No such group' });
+  if (r.error) return res.status(400).json({ error: r.error });
+  console.log(`[Groups] ${req.user.username} closed '${r.name}'`);
   res.json(r);
 });
 app.post('/api/groups', auth.requireEditor, (req, res) => {

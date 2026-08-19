@@ -21,7 +21,11 @@ the **Today board** (below), so signing in starts with what has to happen today:
   hand · show" line, and editors get **✕** on any group row to remove it). Inside a
   group, an item whose stock has **left GT** stops being listed — it folds behind its
   own "N not on hand · show" line, so a group shows what is actually in the building
-  rather than every code it was ever defined with. **All
+  rather than every code it was ever defined with. Groups **close themselves when
+  their stock ships** and stock that comes back does *not* rejoin them — see
+  **Jobs close when they ship** below. A **Not in a group** tab lists every pallet
+  no open group claims (assign an item to a group and its pallets leave the list),
+  which is where returning stock reads until a manager gives it a job. **All
   inventory** gets the width — the page runs to 1500px and its one wide column (the
   product description) wraps, so the table fits whole instead of scrolling sideways
   to reach Weight. The **all-locations** table is still there, with its one-tap zone
@@ -152,24 +156,36 @@ kept off the week strip and the month calendar — it lands on all seven days
 identically, and printing it there would bury the dated work those views exist to
 show; the strip states it once, as `plus N standing jobs every day`.
 
-### Families and one-off jobs
+### Jobs close when they ship
 
 A group matches stock by **item code** and nothing else — not a pallet, not a serial,
-not a receipt date. For a product family that is exactly right: *Grassfed beef* should
-pick up the next delivery. For a job it is wrong: *Bellies for bacon* is this week's
-batch, and when it ships the job is over — but the next pallet of the same code used to
-rejoin the finished group and put it back in front of the floor.
+not a receipt date. Left alone, that means the next arrival of the same code silently
+rejoins a group whose work already shipped: scan *Bellies for bacon* out, receive the
+item back next week, and the finished job is back in front of the floor as though
+nothing happened. That rejoin was the single most confusing thing groups did, so
+closing is the **default**, not an opt-in:
 
-Ticking **One-off job** in the editor marks the second kind. Two bits of state drive it:
+- **Every group is a job** unless marked otherwise: once its stock ships, it closes —
+  it stops matching stock, drops off the board, and shows as `shipped` in the group
+  list. Stock that comes back reads under the **Not in a group** tab until a manager
+  assigns it on purpose.
+- **Product family** (a checkbox in the editor) is the opt-out for the *Grassfed
+  beef* kind of group, which should pick up the next delivery. A family never closes
+  itself.
+
+Two bits of state drive the closing:
 
 - `seenStock` — **armed.** A job created before its pallets land must not close on the
   spot merely for never having had any.
-- `closedAt` — **shipped.** Once armed and then empty, the job closes: it stops matching
-  stock, drops off the board, and shows as `shipped` in the group list.
+- `closedAt` — **shipped.** Once armed and then empty, the job closes. A `closedBy`
+  rides along only when a person closed it (below), so the editor can say who ended
+  it instead of claiming the stock shipped.
 
 Nothing reopens itself — "the code came back" is precisely the event this exists to
 ignore — so a closed job stays closed until someone presses **Reopen**, which re-arms it.
-Families are untouched by all of this and keep collecting new stock as they always did.
+The editor also carries **Close job now** for the other direction: end a job on the
+spot — usually because its stock came back and is reading under work that already
+happened — without waiting for a snapshot to call it empty.
 State advances on the read paths (`/api/groups`, `/api/overview`) and is skipped
 entirely until a snapshot exists, so an empty index can never read as "everything
 shipped" and close every open job at once.
