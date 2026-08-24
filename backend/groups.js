@@ -196,17 +196,33 @@ function cleanDates(obj) {
 //               is exactly the event this exists to ignore.
 //   closedBy  — only set by a MANUAL close (see close()), so the editor can say
 //               who ended the job instead of claiming its stock shipped.
+//
+// A job can also go stale WITHOUT ever arming: its stock shipped before the
+// app was watching (the pre-close-rule world), or never arrived at all. Left
+// open, it lies in wait — the next delivery of its codes, weeks later, lands
+// inside a forgotten group with dead dates, which is the original rejoin
+// confusion wearing a new hat. So an open job with nothing on hand, nothing
+// scheduled today or later, no standing note, and no edit in STALE_DAYS also
+// closes. Anything that still means future work — a dated note from today on,
+// or a standing note — protects the group no matter how old it is.
+const STALE_DAYS = 7;
+
 function reconcile(hasStock) {
   // Aging out closed jobs rides the same clock tick: reconcile runs on every
-  // read path, which is what keeps "30 days" meaning 30 days rather than
+  // read path, which is what keeps "7 days" meaning 7 days rather than
   // "whenever the process next restarts".
   let changed = pruneClosed() > 0;
+  const today = cutoff(0);
+  const staleCut = cutoff(STALE_DAYS);
+  const isStale = (g) => !g.note
+    && !Object.keys(g.dates || {}).some((d) => d >= today)
+    && String(g.updatedAt || '').slice(0, 10) < staleCut;
   for (const g of groups) {
     if (g.family || g.closedAt) continue;
     const on = g.items.some((c) => hasStock.has(c));
-    // Both transitions are logged: "when did the app decide this shipped" has
-    // to be answerable from the server log, not reconstructed from memory —
-    // the close is automatic and the floor will ask.
+    // Every transition is logged: "when did the app decide this" has to be
+    // answerable from the server log, not reconstructed from memory — the
+    // close is automatic and the floor will ask.
     if (on && !g.seenStock) {
       g.seenStock = true;
       changed = true;
@@ -215,6 +231,10 @@ function reconcile(hasStock) {
       g.closedAt = new Date().toISOString();
       changed = true;
       console.log(`[Groups] job '${g.name}' closed itself — the snapshot shows no stock left of ${g.items.join('/')}`);
+    } else if (!on && isStale(g)) {
+      g.closedAt = new Date().toISOString();
+      changed = true;
+      console.log(`[Groups] job '${g.name}' closed itself — nothing on hand, nothing scheduled, untouched for ${STALE_DAYS}+ days`);
     }
   }
   if (changed) persist();

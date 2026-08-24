@@ -184,6 +184,13 @@ Two bits of state drive the closing:
   rides along only when a person closed it (below), so the editor can say who ended
   it instead of claiming the stock shipped.
 
+A job can also go **stale** without ever arming — its stock shipped before the app was
+watching, or never arrived. Left open it lies in wait, and the next delivery of its
+codes lands inside a forgotten group with dead dates. So an open job with nothing on
+hand, nothing scheduled today or later, no standing note, and no edit in 7 days closes
+itself too. A dated note from today on, or a standing note, protects a group no matter
+how old it is.
+
 Nothing reopens itself — "the code came back" is precisely the event this exists to
 ignore — so a closed job stays closed until someone presses **Reopen**, which re-arms it.
 The editor also carries **Close job now** for the other direction: end a job on the
