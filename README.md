@@ -18,7 +18,15 @@ the **Today board** (below), so signing in starts with what has to happen today:
   (editors pick items, name the set, and watch it as one line — with a red count;
   a grouped product reads under its group and is no longer listed on its own; a
   group with nothing on hand folds away behind a counted "N groups with nothing on
-  hand · show" line, and editors get **✕** on any group row to remove it). Inside a
+  hand · show" line, and editors get **✕** on any group row to remove it). Opening a
+  group lists **the pallets themselves**, banded by the date they came in: item code,
+  **pallet ID**, bin, received date, state and its clock. Folding by item answers
+  "how much of this have we got" but never "which pallet, and is this the lot that
+  landed on the 13th" — two receipts of one code read as one line, and a group is
+  usually the exact place someone needs to tell them apart. Oldest band first, since
+  that is the one that should move first; a band holding a red pallet says so on its
+  heading; undated pallets sit at the end rather than pretending to be old. Each
+  code's own pallet count moves up beside it under the group name. Inside a
   group, an item whose stock has **left GT** stops being listed — it folds behind its
   own "N not on hand · show" line, so a group shows what is actually in the building
   rather than every code it was ever defined with. Groups **close themselves when

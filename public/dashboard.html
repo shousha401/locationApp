@@ -125,6 +125,13 @@
     tr.sechead td { background:var(--panel2); font-size:10px; text-transform:uppercase;
       letter-spacing:.06em; color:var(--muted); padding:5px 12px; }
     .subtbl tr.gone td { color:var(--muted); opacity:.65; }
+    /* A receipt-date band heading inside a group. Ruled off and labelled so two
+       lots of the same code read as two lots, which is the whole point of
+       listing pallets instead of folding them. */
+    .subtbl tr.batch td { padding:9px 10px 3px; font-size:10px; font-weight:800;
+      text-transform:uppercase; letter-spacing:.09em; color:var(--accent);
+      border-top:1px solid var(--line); }
+    .subtbl tr.batch:first-child td { border-top:0; padding-top:3px; }
     .gedit { padding:2px 10px; border-radius:7px; border:1px solid var(--line); background:none;
       color:var(--muted); cursor:pointer; font-size:11px; margin-left:8px; }
     .gedit:hover { border-color:var(--accent); color:var(--accent); }
@@ -366,8 +373,12 @@
     const GRP_CODES_SHOWN = 8;
     const gonePhrase = (g) => (g.filtered ? 'not shown' : 'not on hand');
     function codeList(g) {
+      // Each code carries its own pallet count. The rows below are per PALLET
+      // now, banded by receipt date, so "how many of this code" stopped being a
+      // number you could read off a line and became one you had to count.
       const shown = g.products.slice(0, GRP_CODES_SHOWN)
-        .map((p) => `<span class="mono">${esc(p.item)}</span>`).join(' · ');
+        .map((p) => `<span class="mono">${esc(p.item)}</span>`
+          + `<span class="desc"> ${fmtInt(p.pallets.length)}</span>`).join(' · ');
       const rest = g.products.length - Math.min(g.products.length, GRP_CODES_SHOWN);
       // Nothing to list: say it once, with the size of the group, rather than
       // pairing an empty list with a count of what's missing from it. A closed
@@ -1052,9 +1063,29 @@
         // with. A closed job says "shipped" on its own row, so it lists none.
         const released = Object.entries((!g.closedAt && g.left) || {})
           .sort((a, b) => cmpStr(a[0], b[0])).map(([item, at]) => ({ item, at }));
+        // The pallets themselves, banded by the date they came in. Folding by
+        // item answers "how much of this have we got"; it cannot answer "which
+        // pallet, and is this the lot that landed on the 13th" — two receipts of
+        // one code read as a single line, and a group is usually the exact place
+        // someone needs to tell them apart. Oldest band first (that is the one
+        // that should move first); undated pallets land at the end rather than
+        // being dropped or pretending to be old.
+        const byDate = new Map();
+        for (const p of mine) {
+          const k = p.date || '';
+          let arr = byDate.get(k);
+          if (!arr) { arr = []; byDate.set(k, arr); }
+          arr.push(p);
+        }
+        const batches = [...byDate.entries()]
+          .sort((a, b) => (!a[0] ? 1 : !b[0] ? -1 : cmpStr(a[0], b[0])))
+          .map(([date, pallets]) => ({ date,
+            red: pallets.some((p) => p.red),
+            pallets: pallets.sort((x, y) => cmpStr(x.item, y.item) || cmpStr(x.pallet, y.pallet)) }));
         return Object.assign({ id: g.id, name: g.name, plan: planOf(g), dates: g.dates || {}, note: g.note || '',
           family: !!g.family, closedAt: g.closedAt || null,
-          total: g.items.length, products, missing, released, filtered: filtering }, foldPallets(mine));
+          total: g.items.length, products, missing, released, batches,
+          filtered: filtering }, foldPallets(mine));
       }).filter((g) => !filtering || g.products.length)
         .sort((a, b) => cmpStr(a.name, b.name));
     }
@@ -1372,17 +1403,29 @@
                 ...wk.map(([k, label]) => `<span class="d">every ${label}</span> ${esc(g.plan[k])}`),
               ].join('   ·   ')}</div>`;
             })()}
-            ${g.products.length ? `<table class="subtbl">
-              <thead><tr><th>Item</th><th class="num">Pallets</th><th>Location</th><th>Oldest since</th>
-                <th>States</th><th class="num">Cases</th><th class="num">Weight</th></tr></thead>
-              <tbody>${g.products.map((i) => `
-                <tr><td><span class="mono">${esc(i.item)}</span> <span class="desc">${esc(i.description)}</span></td>
-                <td class="num">${fmtInt(i.pallets.length)}${i.red ? ` <span class="redcount">${fmtInt(i.red)}🔴</span>` : ''}</td>
-                <td class="mono">${esc(locSummary(i.locations)) || '—'}</td>
-                <td>${i.since ? `<span class="${i.red ? 'since-late' : ''}">${esc(i.since)}</span>` : '—'}</td>
-                <td>${chips(i.states)}</td>
-                <td class="num">${wStr(asArr(i.cases))}</td>
-                <td class="num">${wStr(asArr(i.weight))}</td></tr>`).join('')}
+            ${g.batches.length ? `<table class="subtbl">
+              <thead><tr><th>Item</th><th>Pallet</th><th>Location</th><th>Received</th>
+                <th>State · since</th><th class="num">Cases</th><th class="num">Weight</th></tr></thead>
+              <tbody>${g.batches.map((b) => {
+                const age = daysSince(b.date);
+                return `
+                <tr class="batch"><td colspan="7">${b.date ? `received ${esc(b.date)}` : 'no received date'}
+                  · ${fmtInt(b.pallets.length)} pallet${b.pallets.length === 1 ? '' : 's'}${
+                    age != null ? ` · ${fmtInt(age)}d ago` : ''}${
+                    b.red ? ' <span class="redcount">🔴</span>' : ''}</td></tr>`
+                + b.pallets.map((p) => {
+                  const sd = daysSince(p.stateDate);
+                  return `
+                <tr><td><span class="mono">${esc(p.item)}</span> <span class="desc">${esc(p.description)}</span></td>
+                <td class="mono">${esc(p.pallet) || '—'}</td>
+                <td class="mono">${p.locations.map((l) => `<a href="/?loc=${encodeURIComponent(l)}">${esc(l)}</a>`).join(' · ') || '—'}</td>
+                <td>${esc(p.date) || '—'}</td>
+                <td>${p.state ? `<span class="chip ${esc(p.state)}${p.red ? ' late' : ''}">${esc(p.state)}</span>` : ''}${
+                  p.stateDate ? ` <span class="desc">${esc(p.stateDate)}${sd != null ? ` (${fmtInt(sd)}d)` : ''}</span>` : ''}</td>
+                <td class="num">${wStr(p.cases)}</td>
+                <td class="num">${wStr(p.weight)}</td></tr>`;
+                }).join('');
+              }).join('')}
               ${!g.missing.length ? '' : `
                 <tr class="gone"><td colspan="7"><button class="link" data-gone="${g.id}">
                   ${fmtInt(g.missing.length)} ${gonePhrase(g)}
