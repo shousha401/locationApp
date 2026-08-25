@@ -379,7 +379,10 @@
       }
       return shown
         + (rest ? ` +${fmtInt(rest)} more` : '')
-        + (g.missing.length ? ` · ${fmtInt(g.missing.length)} ${gonePhrase(g)}` : '');
+        + (g.missing.length ? ` · ${fmtInt(g.missing.length)} ${gonePhrase(g)}` : '')
+        // Kept apart from the count above: "not on hand" is stock still
+        // expected, "shipped" is a code this job has finished with for good.
+        + ((g.released || []).length ? ` · ${fmtInt(g.released.length)} shipped` : '');
     }
     const chips = (states) => (states || []).map((s) => `<span class="chip ${esc(s)}">${esc(s)}</span>`).join('');
 
@@ -388,6 +391,15 @@
     const DAYS = [['mon', 'Mon'], ['tue', 'Tue'], ['wed', 'Wed'], ['thu', 'Thu'],
       ['fri', 'Fri'], ['sat', 'Sat'], ['sun', 'Sun']];
     const planOf = (g) => (g && g.plan) || {};
+
+    // What a group still CLAIMS — its item codes minus the ones it has already
+    // finished with. Mirrors claims() in groups.js: a closed job claims nothing,
+    // and an open job lets go of a single code the moment that code's stock
+    // ships, so stock of it that comes back reads under "Not in a group"
+    // instead of dropping into work that is already done. Everything on this
+    // page that folds stock into a group reads this, never `items`.
+    const claimsOf = (g) => (!g || g.closedAt) ? []
+      : (g.left && !g.family) ? g.items.filter((c) => !g.left[c]) : g.items;
 
     function daysSince(dateStr) {
       if (!dateStr) return null;
@@ -507,8 +519,8 @@
     // items must keep showing here, ticked, not read as somebody else's.
     function unassignedProducts() {
       const claimed = new Set((GROUPS || [])
-        .filter((g) => !g.closedAt && g.id !== EDIT_ID)
-        .flatMap((g) => g.items));
+        .filter((g) => g.id !== EDIT_ID)
+        .flatMap(claimsOf));
       return (O.allProducts || []).filter((p) => !claimed.has(p.item));
     }
 
@@ -541,9 +553,16 @@
       // Products that share a pallet with something else — flagged here so a
       // manager building a group notices before picking, not after.
       const mixedItems = new Set(mixedPalletGroups(INV).flatMap((mg) => mg.items.map((p) => p.item)));
+      // Codes this job has already shipped and let go. They stay ticked — they
+      // are still part of what the group was built from — but the tick alone
+      // would say they are being watched, and they are not. Put one back from
+      // its row under the group in All inventory.
+      const gEdit = EDIT_ID != null ? (GROUPS || []).find((x) => x.id === EDIT_ID) : null;
+      const releasedHere = new Set(Object.keys((gEdit && !gEdit.closedAt && gEdit.left) || {}));
       const row = (p) => `
         <label class="pick"><input type="checkbox" value="${esc(p.item)}" ${CHOSEN.has(p.item) ? 'checked' : ''}>
           <span class="mono">${esc(p.item)}</span>
+          ${releasedHere.has(p.item) ? '<span class="gshipped" title="This job already shipped this product, so it no longer picks up stock of it. Put it back from the group\'s row under All inventory.">shipped</span>' : ''}
           ${mixedItems.has(p.item) ? '<span class="mixflag" title="Shares a pallet with another product — see the ⚠ Mixed pallets tab">⚠</span>' : ''}
           <span class="desc">${esc(p.description)}</span>
           <span class="desc">${fmtInt(p.pallets)} plt</span></label>`;
@@ -775,6 +794,25 @@
     $('gdel').addEventListener('click', async () => {
       if (EDIT_ID != null && await removeGroup(EDIT_ID)) closeEditor();
     });
+    // Put one shipped code back into an open job — Reopen for a single product.
+    // Confirmed, because it un-does a decision the app made from the snapshot
+    // and the row it is pressed on says the opposite until the page reloads.
+    async function restoreItem(id, code) {
+      const g = (O.groups || []).find((x) => x.id === id);
+      if (!g) return;
+      if (!confirm(`Put ${code} back into "${g.name}"?\n\n`
+        + 'It counts toward this job again — stock of it on hand now, and every delivery '
+        + 'of it from here on, reads under this group instead of under "Not in a group". '
+        + 'It leaves the job again on its own once that stock ships.')) return;
+      const res = await fetch(`/api/groups/${id}/items/${encodeURIComponent(code)}/restore`, { method: 'POST' });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        alert(j.error || 'Could not put it back.');
+        return;
+      }
+      await load();
+      TodayBoard.refresh(true); // the group may have gone from empty to on-hand
+    }
     // End the job now, without waiting for its stock to read as shipped — the
     // button for "the item came back and is sitting under a finished job".
     $('gclose').addEventListener('click', async () => {
@@ -917,7 +955,7 @@
     let GRP_DONE_OPEN = false;
     // The server's clock for how long a closed job keeps existing, carried on
     // /api/overview so this file never hardcodes a number groups.js owns.
-    const closedKeep = () => (O && O.closedKeepDays) || 7;
+    const closedKeep = () => (O && O.closedKeepHours) || 24;
     // Which groups are showing the codes that have left GT. Off by default:
     // once its stock is out of the building an item is not "in" the group in
     // any sense the floor cares about, and printing it on every row is what
@@ -925,6 +963,12 @@
     // stays on screen and one click brings the codes back, because "which of
     // my four is missing" is still a real question — just not the default one.
     const GRP_GONE_OPEN = new Set();
+    // Which groups are showing the codes they have SHIPPED — released from the
+    // job, so a later delivery of them will not rejoin it. Its own fold rather
+    // than a line in the one above: a code still expected and a code already
+    // finished with are opposite facts, and folding them together is how
+    // "shipped" ends up read as "missing".
+    const GRP_SHIPPED_OPEN = new Set();
     // Pallet IDs read as "017 633 246" but get typed without spaces.
     const squash = (s) => String(s || '').toUpperCase().replace(/\s+/g, '');
 
@@ -988,21 +1032,29 @@
     // lines; with no filter every group stays visible, zeroes included.
     function namedGroups(rows, filtering) {
       return (GROUPS || []).map((g) => {
-        const want = new Set(g.items);
-        // A CLOSED job matches NOTHING — that is what closing means. Without
-        // this the client-side fold happily showed returning stock inside a
-        // job already marked shipped, undoing the whole point of the close.
-        const mine = g.closedAt ? [] : rows.filter((p) => want.has(p.item));
+        // A CLOSED job matches NOTHING — that is what closing means — and an
+        // open one no longer matches the codes it has already shipped. Both
+        // fall out of claimsOf; folding on `items` instead is what used to show
+        // returning stock inside work that was already finished.
+        const want = new Set(claimsOf(g));
+        const mine = rows.filter((p) => want.has(p.item));
         const products = groupByItem(mine).sort((a, b) => cmpStr(a.item, b.item));
-        // Codes in the group with nothing to show — named, not just counted, so
-        // "3 of 4" never leaves someone guessing which one is missing. Under a
-        // filter these are "not shown" rather than "not on hand": the filter is
-        // hiding stock that exists, and saying otherwise would be a lie.
+        // Codes the group still claims with nothing to show — named, not just
+        // counted, so "3 of 4" never leaves someone guessing which one is
+        // missing. Under a filter these are "not shown" rather than "not on
+        // hand": the filter is hiding stock that exists, and saying otherwise
+        // would be a lie.
         const here = new Set(products.map((p) => p.item));
-        const missing = g.items.filter((c) => !here.has(c)).sort(cmpStr);
+        const missing = [...want].filter((c) => !here.has(c)).sort(cmpStr);
+        // Released, with the day it happened. Deliberately NOT folded in with
+        // `missing`: the two read the same on a row and mean opposite things —
+        // one is stock still expected, the other is a code this job is done
+        // with. A closed job says "shipped" on its own row, so it lists none.
+        const released = Object.entries((!g.closedAt && g.left) || {})
+          .sort((a, b) => cmpStr(a[0], b[0])).map(([item, at]) => ({ item, at }));
         return Object.assign({ id: g.id, name: g.name, plan: planOf(g), dates: g.dates || {}, note: g.note || '',
           family: !!g.family, closedAt: g.closedAt || null,
-          total: g.items.length, products, missing, filtered: filtering }, foldPallets(mine));
+          total: g.items.length, products, missing, released, filtered: filtering }, foldPallets(mine));
       }).filter((g) => !filtering || g.products.length)
         .sort((a, b) => cmpStr(a.name, b.name));
     }
@@ -1019,7 +1071,7 @@
     // this, never what the filter happens to be showing, so a pallet's
     // assignment can't appear to change as someone types.
     function ungroupedRows() {
-      const claimed = new Set((GROUPS || []).filter((g) => !g.closedAt).flatMap((g) => g.items));
+      const claimed = new Set((GROUPS || []).flatMap(claimsOf));
       return INV.filter((p) => !claimed.has(p.item));
     }
 
@@ -1267,11 +1319,15 @@
       // When a Done row closed and when it will remove itself — written on the
       // row, because a job quietly vanishing a week later is exactly the kind
       // of magic that reads as a bug to whoever was looking at it yesterday.
+      // Counted in hours off the real timestamp: a job that closes at 4pm and
+      // deletes at 4pm tomorrow is neither "today" nor "in 1 day" for most of
+      // its life, and a day-granular countdown would say one of those anyway.
       const doneCountdown = (g) => {
-        const closedOn = String(g.closedAt).slice(0, 10);
-        const left = closedKeep() - (daysSince(closedOn) || 0);
-        return `<span class="desc" style="margin-left:7px">closed ${esc(closedOn)} · `
-          + `${left > 0 ? `deletes itself in ${fmtInt(left)}d` : 'deletes itself today'}</span>`;
+        const at = Date.parse(g.closedAt);
+        const left = Number.isFinite(at) ? Math.ceil(closedKeep() - (Date.now() - at) / 3600000) : null;
+        return `<span class="desc" style="margin-left:7px">closed ${esc(String(g.closedAt).slice(0, 10))} · `
+          + `${left == null ? 'deletes itself shortly'
+            : left > 0 ? `deletes itself in ${fmtInt(left)}h` : 'deletes itself any moment now'}</span>`;
       };
       // A group is the same fold as a product, so it prints the same seven
       // columns — a manager reads "Grassfed" exactly the way they read an item.
@@ -1286,7 +1342,7 @@
         return `
           <tr class="click grp" data-grp="${g.id}">
             <td><span class="caret">${open ? '▾' : '▸'}</span><span class="gname">${esc(g.name)}</span>
-              ${g.closedAt ? `<span class="gshipped" title="This job is closed. Stock of these codes — returning or on hand — does not read under it, and the row deletes itself ${fmtInt(closedKeep())} days after closing.">shipped</span>${doneCountdown(g)}`
+              ${g.closedAt ? `<span class="gshipped" title="This job is closed. Stock of these codes — returning or on hand — does not read under it, and the row deletes itself ${fmtInt(closedKeep())} hours after closing.">shipped</span>${doneCountdown(g)}`
                 : (g.family ? '<span class="gjobchip" title="Product family — every new delivery of these item codes joins it automatically, and it never closes itself.">family</span>' : '')}
               ${isMgr ? `<button class="gedit" data-edit="${g.id}">edit</button>`
                 + `<button class="gedit gx" data-del="${g.id}" title="Remove the group '${esc(g.name)}' — the products themselves stay">✕</button>` : ''}
@@ -1334,7 +1390,19 @@
               ${!GRP_GONE_OPEN.has(g.id) ? '' : g.missing.map((c) => `
                 <tr class="gone"><td><span class="mono">${esc(c)}</span>
                   <span class="desc">${esc(descOf(c))}</span></td>
-                <td class="num">0</td><td colspan="5">${gonePhrase(g)}</td></tr>`).join('')}</tbody></table>`
+                <td class="num">0</td><td colspan="5">${gonePhrase(g)}</td></tr>`).join('')}
+              ${!g.released.length ? '' : `
+                <tr class="gone"><td colspan="7"><button class="link" data-shipped="${g.id}">
+                  ${fmtInt(g.released.length)} shipped — done with this job
+                  · ${GRP_SHIPPED_OPEN.has(g.id) ? 'hide' : 'show'}</button></td></tr>`}
+              ${!GRP_SHIPPED_OPEN.has(g.id) ? '' : g.released.map((r) => `
+                <tr class="gone"><td><span class="mono">${esc(r.item)}</span>
+                  <span class="desc">${esc(descOf(r.item))}</span></td>
+                <td class="num">0</td><td colspan="5">shipped ${esc(String(r.at).slice(0, 10))} ·
+                  stock of it that comes back reads under <b>Not in a group</b>${isMgr ? `
+                  <button class="gedit" data-restore="${g.id}" data-code="${esc(r.item)}"
+                    title="Put ${esc(r.item)} back into '${esc(g.name)}' — it counts toward this job again, and leaves it again when its stock next ships">put back</button>` : ''}
+                </td></tr>`).join('')}</tbody></table>`
             : `<span class="desc">${g.closedAt
               ? 'This job is closed — its codes read under Everything else, the Not in a group tab, or whatever group claims them next.'
               : 'None of these products are in GT right now.'}</span>`}
@@ -1355,7 +1423,7 @@
       const doneRows = !namedDone.length ? '' : `
         <tr class="sechead"><td colspan="7"><button class="link" id="grpDoneToggle">
           ✔ ${fmtInt(namedDone.length)} done — finished job${namedDone.length === 1 ? '' : 's'};
-          each deletes itself ${fmtInt(closedKeep())} days after closing, or use its ✕ to delete now
+          each deletes itself ${fmtInt(closedKeep())} hours after closing, or use its ✕ to delete now
           · ${GRP_DONE_OPEN ? 'hide' : 'show'}</button></td></tr>`
         + (GRP_DONE_OPEN ? namedDone.map(grpRow).join('') : '');
 
@@ -1411,6 +1479,15 @@
         renderInventory();
         return;
       }
+      const shipped = e.target.closest('[data-shipped]');
+      if (shipped) {
+        const id = Number(shipped.dataset.shipped);
+        if (GRP_SHIPPED_OPEN.has(id)) GRP_SHIPPED_OPEN.delete(id); else GRP_SHIPPED_OPEN.add(id);
+        renderInventory();
+        return;
+      }
+      const put = e.target.closest('[data-restore]');
+      if (put) { restoreItem(Number(put.dataset.restore), put.dataset.code); return; }
       const ed = e.target.closest('[data-edit]');
       if (ed) { openEditor(Number(ed.dataset.edit)); return; }
       const del = e.target.closest('[data-del]');

@@ -22,8 +22,11 @@ the **Today board** (below), so signing in starts with what has to happen today:
   group, an item whose stock has **left GT** stops being listed — it folds behind its
   own "N not on hand · show" line, so a group shows what is actually in the building
   rather than every code it was ever defined with. Groups **close themselves when
-  their stock ships** and stock that comes back does *not* rejoin them; finished jobs
-  wait in a **Done** fold for a week and then delete themselves — see
+  their stock ships** and stock that comes back does *not* rejoin them — and the same
+  rule runs one product at a time inside a group that is still open: a code whose
+  stock ships is **released** from the job and folds behind its own "N shipped" line,
+  dated, with a **put back** for editors. Finished jobs
+  wait in a **Done** fold for a day and then delete themselves — see
   **Jobs close when they ship** below. A **Not in a group** tab lists every pallet
   no open group claims (assign an item to a group and its pallets leave the list),
   which is where returning stock reads until a manager gives it a job — and the
@@ -140,6 +143,16 @@ The first thing on the feed and the dashboard, read top to bottom:
    shouting about was the one case the board went silent on. Each row keeps its own
    date, and its **✓** ticks it off **on that date**, not today.
 3. **▸ Up next**, then **Also today** — today's open tasks, the first one full-size.
+   Every task row **spells the job out**: under the note, each item code the group
+   claims, with its description, how much is on hand (pallets and cases) and the bins
+   it is in — plus the group's standing note, repeated there, when the row is a dated
+   one. A task is a group and a note, which says what to do but not what to pick up or
+   where it sits: "Pr Ribeyes → send 10 cases to CMP" sends whoever reads it off to
+   find out what a Pr Ribeye is. (Managers had started typing item numbers into the
+   day note by hand — the same information arriving the long way round.) A code with
+   nothing behind it is still listed, saying `none on hand`, because "there is none of
+   this here" is exactly what someone about to walk to a rack needs told. Absent, not
+   empty, until the first snapshot lands.
 4. **📌 Today's note** — the manager's line(s) for the day, in a card of its own.
 5. **The week ahead** — the next seven days as one strip, **every** day drawn even
    when it holds nothing, because "is Thursday free?" is a question a list of only
@@ -175,14 +188,27 @@ closing is the **default**, not an opt-in:
 - **Product family** (a checkbox in the editor) is the opt-out for the *Grassfed
   beef* kind of group, which should pick up the next delivery. A family never closes
   itself.
+- **One product at a time.** A four-code job whose first code ships is not finished —
+  but that code is, so the job **releases** it: the group carries on with what is
+  left, the released code stops matching, and stock of it that comes back reads under
+  **Not in a group** like any other unassigned pallet. Closing at group level only
+  ever caught the last code out of the door; every code before it rejoined silently,
+  which is the same confusion at a size too small to close anything. Releasing the
+  last code leaves the job with nothing on hand, which is exactly when it closes — so
+  a one-code job behaves as it always did. A family releases nothing: picking up the
+  next delivery is the whole point of one.
 
-Two bits of state drive the closing:
+Four bits of state drive the closing:
 
 - `seenStock` — **armed.** A job created before its pallets land must not close on the
   spot merely for never having had any.
 - `closedAt` — **shipped.** Once armed and then empty, the job closes. A `closedBy`
   rides along only when a person closed it (below), so the editor can say who ended
   it instead of claiming the stock shipped.
+- `seenItems` and `left` — the same two facts, per item code: which codes have been
+  on hand, and which have shipped and when. A code is only ever released once it has
+  actually been here, for the same reason `seenStock` exists one size up. What a
+  group *matches* is its item list minus `left` — never the item list itself.
 
 A job can also go **stale** without ever arming — its stock shipped before the app was
 watching, or never arrived. Left open it lies in wait, and the next delivery of its
@@ -192,22 +218,30 @@ itself too. A dated note from today on, or a standing note, protects a group no 
 how old it is.
 
 Nothing reopens itself — "the code came back" is precisely the event this exists to
-ignore — so a closed job stays closed until someone presses **Reopen**, which re-arms it.
-The editor also carries **Close job now** for the other direction: end a job on the
-spot — usually because its stock came back and is reading under work that already
-happened — without waiting for a snapshot to call it empty.
+ignore — so a closed job stays closed until someone presses **Reopen**, which re-arms it
+and puts every released code back with it. The editor also carries **Close job now**
+for the other direction: end a job on the spot — usually because its stock came back
+and is reading under work that already happened — without waiting for a snapshot to
+call it empty. For one code rather than the whole job, a group's row folds its
+released codes behind "N shipped · show" and each carries **put back**: the job counts
+that code again, and lets go of it again when its stock next ships.
 
 A closed job lands in the dashboard's **Done** fold — its own counted line under the
 groups ("N done · show"), newest close first, every row stating when it closed and when
-it deletes itself — and **removes itself 7 days after it closed**: long enough to see
-what shipped and catch a wrong close with Reopen, short enough that finishing a job
-every week doesn't grow the list forever. The row's ✕ deletes it sooner by hand. An
+it deletes itself — and **removes itself 24 hours after it closed**: long enough to see
+what shipped and catch a wrong close with Reopen on the same shift or the next one,
+short enough that a warehouse finishing several jobs a day never opens the dashboard to
+a wall of work that is already done. (It was a week, and a week of closes turned out to
+be most of the group list — 28 of 33 at one point.) The countdown is real hours off the
+close, not whole calendar days, because at this length "yesterday" is the difference
+between three hours and twenty-seven. The row's ✕ deletes it sooner by hand. An
 **empty** group that never closed is left alone — empty usually means its stock hasn't
 landed yet, and its dated notes are still real scheduled work. Editors can of course
 still delete any group at any time (✕ on its row, or **Delete group** in the editor),
-stock or no stock. (Reused group ids can't resurrect old done-ticks: a closed job can't
-be ticked at all, so by deletion day every tick against that id is itself a week old —
-at the far edge of the board's own carry-over window.)
+stock or no stock. (Reused group ids can't resurrect old done-ticks: ids only come back
+around when the highest-numbered groups are the ones deleted, a closed job can't be
+ticked at all, and every tick is keyed by date — so a new group would have to be given
+a note back-dated onto the very day its predecessor was ticked.)
 State advances on the read paths (`/api/groups`, `/api/overview`) and is skipped
 entirely until a snapshot exists, so an empty index can never read as "everything
 shipped" and close every open job at once.
@@ -235,7 +269,12 @@ the floor, so every date sent to the API comes from that browser.
   before it happens, and it's the only one of the two that changes what the week says.
 
 **The day's note** is one free-text note for the day, written by a manager and read by
-everyone. **📅 Month** opens any date in any month — so Friday's note can be written on
+everyone — and **read one line at a time**: managers use the box as a list ("Send back
+Hewitt" / "Send back GCB Lamb Material"), so every line is drawn as its own row with
+its own 📌, on the board, in the week strip and in the calendar alike. Run together as
+one block those are two jobs wearing one instruction, and the second one is the one
+that gets missed. Writing is unchanged — still one box, still one note.
+**📅 Month** opens any date in any month — so Friday's note can be written on
 Monday, and any day's tasks can be ticked. Viewers get no editing affordance at all —
 the routes enforce it too (`403` without `editor`).
 

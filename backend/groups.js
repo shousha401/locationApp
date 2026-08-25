@@ -45,20 +45,28 @@ const MAX_DATES = 366; // a year's worth of one-off notes is plenty; a safety ca
 const KEEP_DATE_DAYS = 30;
 
 // How long a CLOSED job sits in the dashboard's Done list before it deletes
-// itself. A week: long enough to see what shipped and to catch a wrong close
-// with Reopen, short enough that finishing a job every week doesn't grow the
-// list forever — and the ✕ on the row deletes it sooner by hand. Reusing a
-// dead group's id (create() hands out max+1) can't resurrect its done-ticks in
-// practice: a closed job can't be ticked at all — it is off the board from the
-// moment it closes — so by deletion day every tick against that id is itself a
-// week old, and a new group would need a note back-dated a full week for one
-// of those to ever surface on the board's carry-over.
-const KEEP_CLOSED_DAYS = 7;
+// itself. ONE DAY: long enough to see what shipped and to catch a wrong close
+// with Reopen on the same shift or the next one, short enough that a warehouse
+// finishing several jobs a day never opens the dashboard to a wall of work that
+// is already done. (It was a week, and a week of closes turned out to be most
+// of the group list.) The ✕ on the row still deletes one sooner by hand.
+//
+// Measured in HOURS off the actual timestamp, not in whole calendar days: at
+// this length "yesterday" is the difference between three hours and twenty-
+// seven, and a date-only comparison would quietly round it to either.
+//
+// Reusing a dead group's id (create() hands out max+1) can't resurrect its
+// done-ticks in practice: ids only come back around when the highest-numbered
+// groups are the ones deleted, a closed job can't be ticked at all, and every
+// tick is keyed by DATE — so a new group would have to be given a note
+// back-dated onto the very day its predecessor was ticked.
+const KEEP_CLOSED_HOURS = 24;
 const DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 let groups = []; // [{ id, name, items:[codes], plan:{day:dest}, dates:{date:note},
-                 //    family?, seenStock?, closedAt?, closedBy?, updatedBy, updatedAt }]
+                 //    family?, seenStock?, seenItems?:[codes], left?:{code:when},
+                 //    closedAt?, closedBy?, updatedBy, updatedAt }]
 
 function load() {
   let raw;
@@ -110,17 +118,20 @@ function pruneDates() {
   return dropped;
 }
 
-// Drop closed jobs whose closedAt is more than KEEP_CLOSED_DAYS behind us.
-// closedAt is an ISO timestamp, so its date part compares fine against
-// cutoff()'s YYYY-MM-DD. Called from boot and from reconcile() — NEVER from
-// create/update, which hold a reference to one specific group: pruning under
-// an edit could delete the very group being saved and persist without it.
+// Drop closed jobs that closed more than KEEP_CLOSED_HOURS ago. Called from
+// boot and from reconcile() — NEVER from create/update, which hold a reference
+// to one specific group: pruning under an edit could delete the very group
+// being saved and persist without it.
 function pruneClosed() {
-  const cut = cutoff(KEEP_CLOSED_DAYS);
+  const cut = Date.now() - KEEP_CLOSED_HOURS * 3600000;
   let dropped = 0;
   groups = groups.filter((g) => {
-    if (!g.closedAt || String(g.closedAt).slice(0, 10) >= cut) return true;
-    console.log(`[Groups] closed job '${g.name}' aged out (closed ${String(g.closedAt).slice(0, 10)})`);
+    if (!g.closedAt) return true;
+    const at = Date.parse(g.closedAt);
+    // A stamp we can't read is not a licence to delete somebody's group —
+    // keep it and let a person decide with the row's ✕.
+    if (!Number.isFinite(at) || at > cut) return true;
+    console.log(`[Groups] closed job '${g.name}' aged out (closed ${String(g.closedAt).slice(0, 16).replace('T', ' ')} UTC)`);
     dropped++;
     return false;
   });
@@ -187,6 +198,17 @@ function cleanDates(obj) {
 //   `family`  — the opt-in for a real product family ("Grassfed beef" should
 //               pick up the next delivery). It never closes itself.
 //
+// The same rule then runs ONE CODE AT A TIME inside a job that is still open.
+// A group of four codes whose first code ships is not finished — but that code
+// is, and left alone it rejoins silently the moment the next pallet of it is
+// received: the same confusion as the group-level rejoin, just too small to
+// close the group. So a job RELEASES a code as soon as that code's stock ships.
+// The group carries on with what's left, the released code stops matching, and
+// stock of it that comes back reads under "Not in a group" until a manager
+// gives it a job on purpose. Releasing the LAST code leaves the job with
+// nothing on hand, which is exactly when it closes — so a one-code job behaves
+// precisely as it always did.
+//
 // Two bits of state drive the closing:
 //   seenStock — armed. A job created before its pallets land must not close
 //               on the spot merely for never having had any.
@@ -196,6 +218,11 @@ function cleanDates(obj) {
 //               is exactly the event this exists to ignore.
 //   closedBy  — only set by a MANUAL close (see close()), so the editor can say
 //               who ended the job instead of claiming its stock shipped.
+//   seenItems — armed, per code. Same guard as seenStock one level down: a code
+//               that has never been on hand cannot have shipped.
+//   left      — { code: when }. Released. Nothing releases itself back: a
+//               manager puts one code back with restore(), or reopens the job,
+//               which re-arms the whole of it.
 //
 // A job can also go stale WITHOUT ever arming: its stock shipped before the
 // app was watching (the pre-close-rule world), or never arrived at all. Left
@@ -206,6 +233,19 @@ function cleanDates(obj) {
 // closes. Anything that still means future work — a dated note from today on,
 // or a standing note — protects the group no matter how old it is.
 const STALE_DAYS = 7;
+
+// The codes a group actually CLAIMS right now: what it is made of, minus the
+// work it has already finished. A group's definition (`items`) and what it
+// matches stopped being the same list the moment jobs started closing, and the
+// per-code release below splits them further — so everything that folds stock
+// into a group reads THIS, never `items`: the dashboard's group rows, the
+// "Not in a group" tab, and the onHand flag the Today board prints.
+function claims(g) {
+  if (!g) return [];
+  if (g.closedAt) return []; // the whole job is over — it claims nothing at all
+  if (!g.left || g.family) return g.items;
+  return g.items.filter((c) => !g.left[c]);
+}
 
 function reconcile(hasStock) {
   // Aging out closed jobs rides the same clock tick: reconcile runs on every
@@ -219,7 +259,39 @@ function reconcile(hasStock) {
     && String(g.updatedAt || '').slice(0, 10) < staleCut;
   for (const g of groups) {
     if (g.family || g.closedAt) continue;
-    const on = g.items.some((c) => hasStock.has(c));
+    // Per CODE first: arm the ones that turn up, release the ones that go. A
+    // code is only ever released once it has actually BEEN here — otherwise a
+    // job written the day before its pallets land would shed its whole item
+    // list on the first tick, which is the trap seenStock exists to avoid one
+    // level up.
+    const wasArmed = !!g.seenStock;
+    const seen = new Set(g.seenItems || []);
+    const left = g.left || {};
+    let on = false;
+    let perItem = false;
+    for (const c of g.items) {
+      if (left[c]) continue; // released — the next pallet of it is somebody else's job
+      if (hasStock.has(c)) {
+        on = true;
+        if (!seen.has(c)) {
+          seen.add(c);
+          perItem = true;
+          // Only worth a line once the job is already running: the first codes
+          // to land are covered by the group's own "armed" message below.
+          if (wasArmed) console.log(`[Groups] job '${g.name}': ${c} joined it — its stock is on hand`);
+        }
+      } else if (seen.has(c)) {
+        left[c] = new Date().toISOString();
+        seen.delete(c);
+        perItem = true;
+        console.log(`[Groups] job '${g.name}': ${c} shipped — released from the job; stock of it that comes back will not rejoin`);
+      }
+    }
+    if (perItem) {
+      if (seen.size) g.seenItems = [...seen]; else delete g.seenItems;
+      if (Object.keys(left).length) g.left = left; else delete g.left;
+      changed = true;
+    }
     // Every transition is logged: "when did the app decide this" has to be
     // answerable from the server log, not reconstructed from memory — the
     // close is automatic and the floor will ask.
@@ -239,6 +311,38 @@ function reconcile(hasStock) {
   }
   if (changed) persist();
   return changed;
+}
+
+// Forget the per-code job state for whichever codes the predicate picks out,
+// tidying both fields away entirely once they are empty — absent rather than
+// `{}`, so `g.left` alone still answers "has this job released anything".
+function forgetItems(g, drop) {
+  if (g.seenItems) {
+    g.seenItems = g.seenItems.filter((c) => !drop(c));
+    if (!g.seenItems.length) delete g.seenItems;
+  }
+  if (g.left) {
+    for (const c of Object.keys(g.left)) if (drop(c)) delete g.left[c];
+    if (!Object.keys(g.left).length) delete g.left;
+  }
+}
+
+// Put ONE released code back to work without disturbing the rest of the job —
+// "that one came back, and it IS still part of this". It has to be seen on hand
+// again before it can be released a second time, so putting back a code whose
+// stock is still out doesn't simply release it again on the next snapshot.
+function restore(id, code, who) {
+  const g = get(id);
+  if (!g) return null;
+  code = String(code || '').trim();
+  if (g.closedAt) return { error: 'That job is closed — reopen it to put its products back to work' };
+  if (!g.items.includes(code)) return { error: 'That product is not in this group' };
+  if (!g.left || !g.left[code]) return { error: 'That product has not left this group' };
+  forgetItems(g, (c) => c === code);
+  g.updatedBy = who || null;
+  g.updatedAt = new Date().toISOString();
+  persist();
+  return g;
 }
 
 // End a job NOW instead of waiting for the snapshot to read it empty — the
@@ -266,6 +370,10 @@ function reopen(id, who) {
   delete g.closedAt;
   delete g.closedBy;
   delete g.seenStock;
+  // The whole job goes back to work, released codes included: "reopen" means
+  // this job is not over after all, and half a job is not what anyone pressed.
+  delete g.seenItems;
+  delete g.left;
   g.updatedBy = who || null;
   g.updatedAt = new Date().toISOString();
   persist();
@@ -312,6 +420,11 @@ function update(id, patch, who) {
     const items = cleanItems(patch.items);
     if (!items.length) return { error: 'Pick at least one product' };
     g.items = items;
+    // A code taken off the group takes its per-code job state with it, so
+    // picking it again later starts clean instead of inheriting a release from
+    // a previous life. (Untick, save, retick is the long way round to
+    // restore(); it still has to land somewhere sane.)
+    forgetItems(g, (c) => !items.includes(c));
   }
   // An all-blank plan/dates is a legitimate edit — a manager clearing it — so
   // these replace rather than merge. Omitting a field entirely leaves it alone.
@@ -330,6 +443,8 @@ function update(id, patch, who) {
     if (patch.family) g.family = true;
     else delete g.family;
     delete g.seenStock;
+    delete g.seenItems;
+    delete g.left;
     delete g.closedAt;
     delete g.closedBy;
   }
@@ -365,4 +480,5 @@ function remove(id) {
   return g;
 }
 
-module.exports = { list, get, create, update, clearDay, remove, reconcile, close, reopen, DAYS, KEEP_CLOSED_DAYS };
+module.exports = { list, get, claims, create, update, clearDay, remove, reconcile,
+  close, reopen, restore, DAYS, KEEP_CLOSED_HOURS };

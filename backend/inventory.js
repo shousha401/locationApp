@@ -15,6 +15,10 @@
 const fs = require('fs');
 const path = require('path');
 const { getRows, withRetry } = require('./swarmbox');
+// Only for claims(): which of a group's item codes it still matches. The rule
+// has two clauses now (a closed job claims nothing; an open one drops the codes
+// it has already shipped) and it must not be spelled out twice.
+const { claims } = require('./groups');
 
 // 15 min default: pallets sit for hours-to-days, so refreshing faster just
 // re-downloads an identical snapshot — this is the app's ONLY Swarmbox load,
@@ -236,6 +240,53 @@ function itemsOnHand() {
   return onHandCache.set;
 }
 
+// Where each item code's stock actually IS, folded once per snapshot: how much,
+// on how many pallets, in which bins.
+//
+// The Today board reads it. A task is a group and a note — that says what to do
+// but not what to pick up or where it is sitting, so anyone holding the tablet
+// had to leave the board and go searching for the codes. (Managers had started
+// typing item numbers into the day note by hand, which is the same information
+// arriving the long way round.) Memoised against builtAt for the same reason as
+// itemsOnHand(): the board asks this of every group on every poll and has no
+// business paying for the whole overview() aggregation to get it.
+let stockCache = { builtAt: null, map: new Map() };
+function itemStock() {
+  if (stockCache.builtAt !== snap.builtAt) {
+    const map = new Map(); // item -> { units, pallets:Set, locations:Set, cases:Map }
+    for (const [code, rows] of snap.byLocation) {
+      for (const r of rows) {
+        let s = map.get(r.item);
+        if (!s) { s = { units: 0, pallets: new Set(), locations: new Set(), cases: new Map() }; map.set(r.item, s); }
+        s.units++;
+        if (r.pallet) s.pallets.add(r.pallet);
+        s.locations.add(code);
+        if (r.baseUom) s.cases.set(r.baseUom, (s.cases.get(r.baseUom) || 0) + r.baseQty);
+      }
+    }
+    stockCache = { builtAt: snap.builtAt, map };
+  }
+  return stockCache.map;
+}
+
+// The same, shaped for one group's item codes. A code with nothing on hand
+// still comes back, at zero: "there is none of this here" is precisely what
+// someone about to walk out to a bin needs told, not left off the list.
+function stockFor(codes) {
+  const st = itemStock();
+  return (codes || []).map((item) => {
+    const s = st.get(item);
+    return {
+      item,
+      description: snap.itemDesc.get(item) || '',
+      units: s ? s.units : 0,
+      pallets: s ? s.pallets.size : 0,
+      cases: s ? [...s.cases.entries()].map(([uom, qty]) => ({ uom, qty })) : [],
+      locations: s ? [...s.locations].sort() : [],
+    };
+  });
+}
+
 // Typeahead: prefix matches first, then substring, capped.
 function searchLocations(q, limit = 50) {
   q = String(q || '').trim().toUpperCase();
@@ -336,17 +387,19 @@ function overview(groupDefs) {
     id: g.id, name: g.name, items: g.items, plan: g.plan || {},
     dates: g.dates || {}, note: g.note || '',
     family: !!g.family, closedAt: g.closedAt || null, closedBy: g.closedBy || null,
-    updatedBy: g.updatedBy, updatedAt: g.updatedAt,
+    left: g.left || null, updatedBy: g.updatedBy, updatedAt: g.updatedAt,
     units: 0, pallets: new Set(), redPallets: new Set(), cases: new Map(), weight: new Map(),
     perItem: new Map(), // item -> { units, pallets:Set, cases:Map, weight:Map, red:Set }
   }));
-  // A CLOSED job is left out of the index entirely, so nothing that arrives
-  // from here on counts toward it. That is the point of closing: the job
-  // shipped, and the next pallet of the same item code is somebody else's
-  // work. It still comes back in the summary below, labelled closed, rather
-  // than vanishing — a finished job is a thing you should still be able to see.
+  // Indexed by what each group CLAIMS, not by what it is made of. A closed job
+  // claims nothing, so nothing arriving from here on counts toward it — that is
+  // the point of closing: the job shipped, and the next pallet of the same item
+  // code is somebody else's work. An open job drops the individual codes that
+  // have already shipped out of it, for exactly the same reason one size down.
+  // Both still come back in the summary below, labelled, rather than vanishing —
+  // finished work is a thing you should still be able to see.
   const groupsByItem = new Map();
-  for (const g of gAgg) for (const it of (g.closedAt ? [] : g.items)) {
+  for (const g of gAgg) for (const it of claims(g)) {
     let arr = groupsByItem.get(it);
     if (!arr) { arr = []; groupsByItem.set(it, arr); }
     arr.push(g);
@@ -467,7 +520,7 @@ function overview(groupDefs) {
     .map((g) => ({
       id: g.id, name: g.name, items: g.items, plan: g.plan, dates: g.dates, note: g.note,
       family: g.family, closedAt: g.closedAt, closedBy: g.closedBy,
-      updatedBy: g.updatedBy, updatedAt: g.updatedAt,
+      left: g.left, updatedBy: g.updatedBy, updatedAt: g.updatedAt,
       presentItems: g.perItem.size, units: g.units, pallets: g.pallets.size,
       redPallets: g.redPallets.size, cases: wArr(g.cases), weight: wArr(g.weight),
       perItem: [...g.perItem.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1)).map(([item, gi]) => ({
@@ -505,4 +558,5 @@ function start() {
   if (timer.unref) timer.unref();
 }
 
-module.exports = { start, refresh, status, searchLocations, getLocation, overview, itemsOnHand };
+module.exports = { start, refresh, status, searchLocations, getLocation, overview,
+  itemsOnHand, stockFor };

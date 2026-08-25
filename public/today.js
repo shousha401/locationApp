@@ -47,6 +47,14 @@
     const d = new Date(iso);
     return isNaN(d) ? '' : d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
   };
+  // A day note is ONE free-text box, and managers use it as a LIST: one job per
+  // line ("Send back Hewitt" / "Send back GCB Lamb Material"). Printed as a
+  // single block those are two jobs wearing one instruction, and the second one
+  // is the one that gets missed — so every line is drawn as its own row with
+  // its own pin. Writing is untouched: this is how the note is READ, not how it
+  // is stored, and a manager still types one box.
+  const noteLines = (text) => String(text == null ? '' : text)
+    .split('\n').map((s) => s.trim()).filter(Boolean);
   // How many days past today the week strip looks. Six, not seven: a full week
   // ahead lands on today's own weekday again, so the weekly plan's tasks would
   // show twice — once big as today's, once dimmed as "next Wednesday's".
@@ -120,6 +128,29 @@
     .tb-cap2 { font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:.11em;
       color:var(--muted); margin:16px 0 8px; }
 
+    /* The job spelled out under the task: which product, how much of it, which
+       bins, plus any standing rule the manager put on the group. The board is
+       read on a floor tablet by someone who is about to go and move the stock,
+       so "which one and where" has to be printed on the row — there is nowhere
+       to search from here, and a task naming only a group is a task that sends
+       someone off to find out what it means. */
+    .tb-detail { flex-basis:100%; width:100%; display:flex; flex-direction:column; gap:5px; margin-top:10px; }
+    .tb-si { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; font-size:15px; line-height:1.3; }
+    .tb-code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-weight:800;
+      font-size:16px; color:var(--text); }
+    .tb-desc { color:var(--muted); }
+    .tb-amt { font-weight:800; color:var(--good); white-space:nowrap; }
+    .tb-where { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--accent); }
+    /* A code with nothing behind it stays on the list and says so — leaving it
+       off would read as "this one is fine", which is the opposite of true. */
+    .tb-si-out .tb-code, .tb-si-out .tb-desc { opacity:.55; }
+    .tb-none-amt { font-weight:800; color:var(--warn); white-space:nowrap; }
+    /* A standing note repeated under a dated task: the same rule the group
+       carries every day, printed where the work is rather than only on its own
+       row further down. */
+    .tb-also { display:flex; align-items:baseline; gap:9px; flex-wrap:wrap; font-size:14px; color:var(--muted); }
+    .tb-also b { color:var(--text); font-weight:700; }
+
     /* Sized for a thumb on a floor tablet, not a mouse on a desk. */
     .tb-btn { padding:6px 13px; border-radius:999px; border:1px solid var(--line);
       background:var(--bg); color:var(--muted); cursor:pointer; font-size:12px; white-space:nowrap; }
@@ -171,6 +202,12 @@
     .tb-note .tb-cap { display:block; font-size:10px; font-weight:800; text-transform:uppercase;
       letter-spacing:.12em; color:var(--warn); margin-bottom:6px; }
     .tb-notetext { white-space:pre-wrap; line-height:1.5; }
+    /* One job per row, ruled off from the next. A note holding three jobs is
+       three things to do; one block of text is one thing to read, and whoever
+       reads it stops at the first line. */
+    .tb-noteline { display:flex; align-items:baseline; gap:9px; padding:5px 0; }
+    .tb-noteline + .tb-noteline { border-top:1px dashed rgba(251,191,36,.3); }
+    .tb-notepin { flex:0 0 auto; font-size:13px; opacity:.85; }
     .tb-addnote { margin-top:16px; }
     .tb-hide { display:none; }
 
@@ -432,7 +469,7 @@
         body = `<div class="tb-wk-sum${open.length ? '' : ' tb-wk-clear'}">
           ${open.length ? `<b>${open.length} to do</b>listed above ↑`
             : `<b>all clear</b>${tasks.length ? `${tasks.length} done` : 'nothing scheduled'}`}</div>`;
-      } else if (tasks.length || (note && note.text)) {
+      } else if (tasks.length || noteLines(note && note.text).length) {
         body = tasks.map((t) => `
           <div class="tb-wk-task${doneMap[t.key] ? ' tb-wk-off' : ''}">
             <div><b>${esc(t.g.name)}</b><i>${esc(t.text)}</i></div>
@@ -442,7 +479,8 @@
               : `<button class="tb-btn tb-x" data-clear="${esc(t.g.id)}" data-date="${esc(date)}"
                   title="Delete this note from every ${esc(dayKeyOf(date).toUpperCase())} — it won't come back next week">✕</button>`) : ''}
           </div>`).join('')
-          + (note && note.text ? `<div class="tb-wk-note">📌 ${esc(note.text)}</div>` : '');
+          + noteLines(note && note.text)
+            .map((line) => `<div class="tb-wk-note">📌 ${esc(line)}</div>`).join('');
       } else {
         body = '<div class="tb-wk-empty">—</div>';
       }
@@ -525,6 +563,44 @@
       ${t.standing ? '<span class="tb-every">every day</span>' : ''}
       ${t.g.onHand === false ? '<span class="tb-gone">nothing on hand</span>' : ''}`;
 
+    // Everything else the person acting on this row needs, printed under it:
+    // the products the group is actually made of — code, description, how much
+    // is on hand and in which bins — and any standing rule the manager wrote on
+    // the group that this row isn't already saying.
+    //
+    // The group NAME is the floor's word for a job ("Pr Ribeyes"), not a thing
+    // you can scan or walk to. Everyone reading this board is holding a tablet
+    // in front of a rack, so a task that names only the group makes them go and
+    // look the codes up somewhere else — and the visible workaround for that
+    // was managers typing item numbers into the day note by hand. `stock` is
+    // absent until the first snapshot lands, so a cold start prints nothing
+    // here rather than claiming a group is empty.
+    const LOCS_SHOWN = 4;
+    const fmtQty = (n) => (Math.abs(n % 1) < 1e-9 ? Math.round(n).toLocaleString()
+      : n.toLocaleString(undefined, { maximumFractionDigits: 2 }));
+    const amount = (s) => [`${s.pallets} plt`]
+      .concat((s.cases || []).map((c) => `${fmtQty(c.qty)} ${c.uom}`)).join(' · ');
+    function taskDetail(t) {
+      const st = t.g.stock || [];
+      // The standing note IS its own row further down the list; repeating it
+      // here is deliberate, and only under a DATED task — the rule for this
+      // group is part of doing this group's job, and two rows apart is far
+      // enough to miss when you are reading one line and walking away.
+      const also = !t.standing && t.g.note
+        ? `<div class="tb-also">📌 <b>every day:</b> ${esc(t.g.note)}</div>` : '';
+      if (!st.length && !also) return '';
+      return `<div class="tb-detail">${also}${st.map((s) => `
+        <div class="tb-si${s.pallets ? '' : ' tb-si-out'}">
+          <span class="tb-code">${esc(s.item)}</span>
+          ${s.description ? `<span class="tb-desc">${esc(s.description)}</span>` : ''}
+          ${s.pallets
+            ? `<span class="tb-amt">${esc(amount(s))}</span>
+               <span class="tb-where">${esc(s.locations.slice(0, LOCS_SHOWN).join('  ·  '))}${
+                 s.locations.length > LOCS_SHOWN ? ` +${s.locations.length - LOCS_SHOWN} more` : ''}</span>`
+            : '<span class="tb-none-amt">none on hand</span>'}
+        </div>`).join('')}</div>`;
+    }
+
     EL.innerHTML = `<div class="tb">
       <div class="tb-top">
         <div class="tb-datebox">
@@ -544,17 +620,17 @@
           <div class="tb-late-cap">⚠ Not done — carried over</div>
           ${late.map((t) => `<div class="tb-late-row">
             <span class="tb-late-date">${esc(fromYmd(t.date).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }))}</span>
-            ${taskBody(t)}${btns(t, t.date)}
+            ${taskBody(t)}${btns(t, t.date)}${taskDetail(t)}
           </div>`).join('')}
         </div>` : ''}
       ${next ? `
         <div class="tb-next">
           <div class="tb-next-cap">▸ Up next</div>
-          <div class="tb-next-row">${taskBody(next)}${btns(next)}</div>
+          <div class="tb-next-row">${taskBody(next)}${btns(next)}${taskDetail(next)}</div>
         </div>` : `<div class="tb-none">${done.length ? 'Everything for today is checked off. ✅'
           : 'No tasks scheduled for today.'}</div>`}
       ${rest.length ? `<div class="tb-cap2">Also today</div>
-        <ul class="tb-list">${rest.map((t) => `<li>${taskBody(t)}${btns(t)}</li>`).join('')}</ul>` : ''}
+        <ul class="tb-list">${rest.map((t) => `<li>${taskBody(t)}${btns(t)}${taskDetail(t)}</li>`).join('')}</ul>` : ''}
       ${done.length ? `
         <div class="tb-donebar">
           <button class="tb-link" id="tb-toggledone">${done.length} done today · ${SHOW_DONE ? 'hide' : 'show'}</button>
@@ -565,9 +641,10 @@
             <span class="tb-meta">${esc(t.text)}${m.by ? ` · done by ${esc(m.by)}` : ''}${m.at ? ` · ${esc(clock(m.at))}` : ''}</span>
             <button class="tb-btn" data-undo="${esc(t.key)}">undo</button></li>`;
         }).join('')}</ul>` : ''}
-      ${note && note.text ? `
+      ${note && noteLines(note.text).length ? `
         <div class="tb-note"><span class="tb-cap">📌 Today's note</span>
-          <span class="tb-notetext">${esc(note.text)}</span>
+          ${noteLines(note.text).map((line) => `<div class="tb-noteline"><span class="tb-notepin">📌</span>
+            <span class="tb-notetext">${esc(line)}</span></div>`).join('')}
           <div class="tb-meta">${note.by ? `— ${esc(note.by)}` : ''}${note.at ? `, ${esc(clock(note.at))}` : ''}</div></div>`
         : (mgr ? `<div class="tb-addnote"><button class="tb-link" id="tb-addnote">＋ add a note for today</button></div>` : '')}
       ${weekStripHtml()}
@@ -877,7 +954,10 @@
             <button class="tb-cancel" data-cal-canceledit="1">Cancel</button>
             <button class="tb-save" data-cal-savenote="1">Save</button>
           </div>` : `
-          <span class="tb-notetext">${note && note.text ? esc(note.text) : '<span class="tb-none">No note for this date.</span>'}</span>
+          ${noteLines(note && note.text).length
+            ? noteLines(note.text).map((line) => `<div class="tb-noteline"><span class="tb-notepin">📌</span>
+                <span class="tb-notetext">${esc(line)}</span></div>`).join('')
+            : '<span class="tb-none">No note for this date.</span>'}
           ${mgr ? '<button class="tb-link" data-cal-editnote="1">✎ edit</button>' : ''}`}
       </div>`;
   }

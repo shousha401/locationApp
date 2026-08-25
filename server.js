@@ -83,11 +83,11 @@ app.put('/api/notes/:code', auth.requireEditor, (req, res) => {
 });
 
 // Whole-snapshot aggregates for the dashboard. Served from RAM — costs Swarmbox nothing.
-// closedKeepDays rides along so the dashboard's Done list can say when a
+// closedKeepHours rides along so the dashboard's Done list can say when a
 // finished job will remove itself without hardcoding the server's clock.
 app.get('/api/overview', (_req, res) => {
   reconcileJobs();
-  res.json({ ...inventory.overview(groups.list()), closedKeepDays: groups.KEEP_CLOSED_DAYS });
+  res.json({ ...inventory.overview(groups.list()), closedKeepHours: groups.KEEP_CLOSED_HOURS });
 });
 
 // ── Product groups ───────────────────────────────────────────────────────────
@@ -137,7 +137,15 @@ function reconcileJobs() {
 app.get('/api/groups', (_req, res) => {
   const onHand = reconcileJobs();
   const list = onHand
-    ? groups.list().map((g) => ({ ...g, onHand: !g.closedAt && g.items.some((c) => onHand.has(c)) }))
+    // `stock` rides along so the board can print WHICH product a task is about
+    // and where it sits — the codes it claims, each with its description,
+    // pallet count and bins. Only when a snapshot exists, and only the claimed
+    // codes: a code the job has already shipped is not what anyone is being
+    // sent to pick up.
+    ? groups.list().map((g) => {
+      const mine = groups.claims(g);
+      return { ...g, onHand: mine.some((c) => onHand.has(c)), stock: inventory.stockFor(mine) };
+    })
     : groups.list();
   res.json({ groups: list, days: groups.DAYS });
 });
@@ -148,6 +156,17 @@ app.post('/api/groups/:id/reopen', auth.requireEditor, (req, res) => {
   if (!r) return res.status(404).json({ error: 'No such group' });
   if (r.error) return res.status(400).json({ error: r.error });
   console.log(`[Groups] ${req.user.username} reopened '${r.name}'`);
+  res.json(r);
+});
+// Put ONE product back to work inside an open job, after the job released it
+// for having shipped. The small twin of Reopen: the job carried on without this
+// code, its stock came back, and a manager is saying it still belongs here —
+// rather than untick-save-retick, which is the same thing spelled out long.
+app.post('/api/groups/:id/items/:code/restore', auth.requireEditor, (req, res) => {
+  const r = groups.restore(req.params.id, req.params.code, req.user.username);
+  if (!r) return res.status(404).json({ error: 'No such group' });
+  if (r.error) return res.status(400).json({ error: r.error });
+  console.log(`[Groups] ${req.user.username} put ${req.params.code} back into '${r.name}'`);
   res.json(r);
 });
 // End a job now — the manual twin of the automatic close-on-ship, for the job
