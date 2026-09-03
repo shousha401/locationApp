@@ -412,6 +412,22 @@
     const claimsOf = (g) => (!g || g.closedAt) ? []
       : (g.left && !g.family) ? g.items.filter((c) => !g.left[c]) : g.items;
 
+    // A group SPLIT into a batch is pinned to named pallets: it holds those and
+    // nothing else, and every ordinary group leaves them alone, so one pallet is
+    // never counted under two jobs. Mirrors isBatch()/pinnedRows() in groups.js.
+    // NB `batchPallets`, not `pallets`: on this page a group comes from
+    // /api/overview, where `pallets` is the COUNT of pallets found under it.
+    const isBatch = (g) => !!(g && g.batchPallets && g.batchPallets.length);
+    const pinKey = (pallet, item) => `${pallet}|${item}`;
+    function pinnedRows() {
+      const s = new Set();
+      for (const g of (GROUPS || [])) {
+        if (g.closedAt || !isBatch(g)) continue;
+        for (const p of g.batchPallets) for (const i of g.items) s.add(pinKey(p, i));
+      }
+      return s;
+    }
+
     function daysSince(dateStr) {
       if (!dateStr) return null;
       const d = new Date(String(dateStr).length <= 10 ? dateStr + 'T00:00:00' : dateStr);
@@ -530,7 +546,7 @@
     // items must keep showing here, ticked, not read as somebody else's.
     function unassignedProducts() {
       const claimed = new Set((GROUPS || [])
-        .filter((g) => g.id !== EDIT_ID)
+        .filter((g) => g.id !== EDIT_ID && !isBatch(g))
         .flatMap(claimsOf));
       return (O.allProducts || []).filter((p) => !claimed.has(p.item));
     }
@@ -824,6 +840,39 @@
       await load();
       TodayBoard.refresh(true); // the group may have gone from empty to on-hand
     }
+    // Split one date band off a group into a job of its own. The pallets that
+    // went into temper on the 1st are ready before the ones from the 2nd, and
+    // an item code cannot tell those apart — so the new group is pinned to
+    // these exact pallets. The parent keeps its codes, so the next delivery
+    // still lands there rather than in the batch that is on its way out.
+    async function splitBatch(id, since) {
+      const g = (O.groups || []).find((x) => x.id === id);
+      const band = (namedGroups(INV, false).find((x) => x.id === id) || { batches: [] })
+        .batches.find((b) => b.since === since);
+      if (!g || !band) return;
+      const pallets = [...new Set(band.pallets.map((p) => p.pallet).filter(Boolean))];
+      const items = [...new Set(band.pallets.map((p) => p.item))];
+      if (!pallets.length) { alert('These lines carry no pallet ID, so there is nothing to pin a batch to.'); return; }
+      const suggested = `${g.name} — since ${since || 'no date'}`.slice(0, 60);
+      const name = prompt(`Split ${fmtInt(pallets.length)} pallet${pallets.length === 1 ? '' : 's'} off "${g.name}"?\n\n`
+        + `They stop counting under "${g.name}" and become a job of their own, holding these exact pallets `
+        + `and nothing else. "${g.name}" keeps its item codes, so the next delivery still lands there.\n\n`
+        + 'Name for the new group:', suggested);
+      if (name == null) return;
+      const res = await fetch('/api/groups/' + id + '/split', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name.trim(), pallets, items }),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        alert(j.error || 'Could not split.');
+        return;
+      }
+      const made = await res.json().catch(() => null);
+      if (made) GRP_OPEN.add(made.id); // open the new job, so the split is visible on the spot
+      await load();
+      TodayBoard.refresh(true);
+    }
     // End the job now, without waiting for its stock to read as shipped — the
     // button for "the item came back and is sitting under a finished job".
     $('gclose').addEventListener('click', async () => {
@@ -1042,13 +1091,16 @@
     // products are all filtered out drop off rather than showing as empty
     // lines; with no filter every group stays visible, zeroes included.
     function namedGroups(rows, filtering) {
+      const pinned = pinnedRows();
       return (GROUPS || []).map((g) => {
         // A CLOSED job matches NOTHING — that is what closing means — and an
         // open one no longer matches the codes it has already shipped. Both
         // fall out of claimsOf; folding on `items` instead is what used to show
         // returning stock inside work that was already finished.
         const want = new Set(claimsOf(g));
-        const mine = rows.filter((p) => want.has(p.item));
+        const own = isBatch(g) ? new Set(g.batchPallets) : null;
+        const mine = rows.filter((p) => want.has(p.item)
+          && (own ? own.has(p.pallet) : !pinned.has(pinKey(p.pallet, p.item))));
         const products = groupByItem(mine).sort((a, b) => cmpStr(a.item, b.item));
         // Codes the group still claims with nothing to show — named, not just
         // counted, so "3 of 4" never leaves someone guessing which one is
@@ -1070,20 +1122,29 @@
         // someone needs to tell them apart. Oldest band first (that is the one
         // that should move first); undated pallets land at the end rather than
         // being dropped or pretending to be old.
-        const byDate = new Map();
+        // Banded by the SINCE date — when the pallet entered the state it is in
+        // — not by when it was received. That is the line the floor actually
+        // works to: pallets that went into temper on the 1st are ready before
+        // the ones from the 2nd, and they are two jobs however much they share
+        // an item number. Receipt date doesn't separate them at all (one lot
+        // here is 05-14 on both sides of the split) and scatters a single job
+        // across a dozen bands. The received date stays on every row.
+        const bySince = new Map();
         for (const p of mine) {
-          const k = p.date || '';
-          let arr = byDate.get(k);
-          if (!arr) { arr = []; byDate.set(k, arr); }
+          const k = p.stateDate || '';
+          let arr = bySince.get(k);
+          if (!arr) { arr = []; bySince.set(k, arr); }
           arr.push(p);
         }
-        const batches = [...byDate.entries()]
+        const batches = [...bySince.entries()]
           .sort((a, b) => (!a[0] ? 1 : !b[0] ? -1 : cmpStr(a[0], b[0])))
-          .map(([date, pallets]) => ({ date,
+          .map(([since, pallets]) => ({ since,
             red: pallets.some((p) => p.red),
+            state: pallets[0].state || '',
             pallets: pallets.sort((x, y) => cmpStr(x.item, y.item) || cmpStr(x.pallet, y.pallet)) }));
         return Object.assign({ id: g.id, name: g.name, plan: planOf(g), dates: g.dates || {}, note: g.note || '',
           family: !!g.family, closedAt: g.closedAt || null,
+          batchPallets: g.batchPallets || null,
           total: g.items.length, products, missing, released, batches,
           filtered: filtering }, foldPallets(mine));
       }).filter((g) => !filtering || g.products.length)
@@ -1102,8 +1163,11 @@
     // this, never what the filter happens to be showing, so a pallet's
     // assignment can't appear to change as someone types.
     function ungroupedRows() {
-      const claimed = new Set((GROUPS || []).flatMap(claimsOf));
-      return INV.filter((p) => !claimed.has(p.item));
+      // A batch claims PALLETS, not codes, so the rest of its code's stock is
+      // unassigned unless an ordinary group is also watching it.
+      const pinned = pinnedRows();
+      const claimed = new Set((GROUPS || []).filter((g) => !isBatch(g)).flatMap(claimsOf));
+      return INV.filter((p) => !pinned.has(pinKey(p.pallet, p.item)) && !claimed.has(p.item));
     }
 
     // The counts badge the tabs themselves, so a manager can tell there's
@@ -1374,7 +1438,8 @@
           <tr class="click grp" data-grp="${g.id}">
             <td><span class="caret">${open ? '▾' : '▸'}</span><span class="gname">${esc(g.name)}</span>
               ${g.closedAt ? `<span class="gshipped" title="This job is closed. Stock of these codes — returning or on hand — does not read under it, and the row deletes itself ${fmtInt(closedKeep())} hours after closing.">shipped</span>${doneCountdown(g)}`
-                : (g.family ? '<span class="gjobchip" title="Product family — every new delivery of these item codes joins it automatically, and it never closes itself.">family</span>' : '')}
+                : (g.family ? '<span class="gjobchip" title="Product family — every new delivery of these item codes joins it automatically, and it never closes itself.">family</span>'
+                  : isBatch(g) ? `<span class="gjobchip" title="A batch split off another group: it holds these ${fmtInt(g.batchPallets.length)} pallets and nothing else. New stock of the same item code does NOT join it.">batch · ${fmtInt(g.batchPallets.length)} plt</span>` : '')}
               ${isMgr ? `<button class="gedit" data-edit="${g.id}">edit</button>`
                 + `<button class="gedit gx" data-del="${g.id}" title="Remove the group '${esc(g.name)}' — the products themselves stay">✕</button>` : ''}
               <div class="desc" style="padding-left:11px">${codeList(g)}</div></td>
@@ -1407,12 +1472,17 @@
               <thead><tr><th>Item</th><th>Pallet</th><th>Location</th><th>Received</th>
                 <th>State · since</th><th class="num">Cases</th><th class="num">Weight</th></tr></thead>
               <tbody>${g.batches.map((b) => {
-                const age = daysSince(b.date);
+                const age = daysSince(b.since);
+                // Splitting is only meaningful where there is more than one
+                // band — one band split off is the same job under a new name.
+                const canSplit = isMgr && !g.closedAt && g.batches.length > 1;
                 return `
-                <tr class="batch"><td colspan="7">${b.date ? `received ${esc(b.date)}` : 'no received date'}
+                <tr class="batch"><td colspan="7">${b.since ? `${esc(b.state || 'since')} since ${esc(b.since)}` : 'no state date'}
                   · ${fmtInt(b.pallets.length)} pallet${b.pallets.length === 1 ? '' : 's'}${
-                    age != null ? ` · ${fmtInt(age)}d ago` : ''}${
-                    b.red ? ' <span class="redcount">🔴</span>' : ''}</td></tr>`
+                    age != null ? ` · ${fmtInt(age)}d` : ''}${
+                    b.red ? ' <span class="redcount">🔴</span>' : ''}${canSplit
+                    ? ` <button class="gedit" data-split="${g.id}" data-since="${esc(b.since)}"
+                        title="Split these ${fmtInt(b.pallets.length)} pallets off '${esc(g.name)}' into a job of their own">split off</button>` : ''}</td></tr>`
                 + b.pallets.map((p) => {
                   const sd = daysSince(p.stateDate);
                   return `
@@ -1531,6 +1601,8 @@
       }
       const put = e.target.closest('[data-restore]');
       if (put) { restoreItem(Number(put.dataset.restore), put.dataset.code); return; }
+      const sp = e.target.closest('[data-split]');
+      if (sp) { splitBatch(Number(sp.dataset.split), sp.dataset.since); return; }
       const ed = e.target.closest('[data-edit]');
       if (ed) { openEditor(Number(ed.dataset.edit)); return; }
       const del = e.target.closest('[data-del]');

@@ -19,14 +19,19 @@ the **Today board** (below), so signing in starts with what has to happen today:
   a grouped product reads under its group and is no longer listed on its own; a
   group with nothing on hand folds away behind a counted "N groups with nothing on
   hand · show" line, and editors get **✕** on any group row to remove it). Opening a
-  group lists **the pallets themselves**, banded by the date they came in: item code,
-  **pallet ID**, bin, received date, state and its clock. Folding by item answers
-  "how much of this have we got" but never "which pallet, and is this the lot that
-  landed on the 13th" — two receipts of one code read as one line, and a group is
-  usually the exact place someone needs to tell them apart. Oldest band first, since
-  that is the one that should move first; a band holding a red pallet says so on its
-  heading; undated pallets sit at the end rather than pretending to be old. Each
-  code's own pallet count moves up beside it under the group name. Inside a
+  group lists **the pallets themselves**, banded by their **since date** — when the
+  pallet entered the state it is in: item code, **pallet ID**, bin, received date,
+  state and its clock. Folding by item answers "how much of this have we got" but
+  never "which pallet, and is this the lot that went into temper on Tuesday" — and
+  that second question is the one the floor works to, because pallets tempering since
+  the 1st are ready before ones from the 2nd. Receipt date is the wrong axis for it:
+  one real lot here splits 4/3 by since-date while both halves were received on the
+  same day, and banding G2 Material by receipt scattered a single job across fourteen
+  bands. Oldest band first, since that is the one that should move first; a band
+  holding a red pallet says so on its heading; undated pallets sit at the end rather
+  than pretending to be old. Each code's own pallet count moves up beside it under
+  the group name. Where a group holds more than one band, editors get **split off** on
+  each heading — see **Splitting a batch off a group** below. Inside a
   group, an item whose stock has **left GT** stops being listed — it folds behind its
   own "N not on hand · show" line, so a group shows what is actually in the building
   rather than every code it was ever defined with. Groups **close themselves when
@@ -233,6 +238,35 @@ and is reading under work that already happened — without waiting for a snapsh
 call it empty. For one code rather than the whole job, a group's row folds its
 released codes behind "N shipped · show" and each carries **put back**: the job counts
 that code again, and lets go of it again when its stock next ships.
+
+### Splitting a batch off a group
+
+An item code is the right unit for "watch this product" and the wrong one for "this
+lot goes back Wednesday". One code's stock arrives in batches, and the pallets that
+went into temper on the 1st are ready before the ones from the 2nd — two jobs, however
+much they share an item number. Nothing about a code can tell them apart.
+
+So a group can be **pinned to a list of pallet ids**: a *batch*, holding exactly those
+pallets and nothing else. **split off** on a since-date band inside a group makes one
+out of that band. The new group carries a `batch · N plt` chip; the parent keeps its
+item codes, so **the next delivery still lands in the parent** and only the batch that
+was split off is frozen. A batch takes no notes or dates from its parent — it has its
+own schedule, and inheriting the parent's dated work would put one instruction on the
+board twice.
+
+The two must never both count the same pallet, so a pinned pallet belongs to its batch
+and drops out of any ordinary group claiming the same code — in the group totals, on
+the Today board's task rows, and in the **Not in a group** tab alike. Keyed by pallet
+*and* item, because one physical pallet can carry two products and only one of them
+may be the batch's.
+
+A batch arms and closes on **its own pallets**: when they ship it closes, exactly like
+any other job, while the parent stays open waiting for the next delivery. Splitting a
+batch again is allowed (a lot re-tempered in two goes) and moves pallets out of the
+first batch rather than leaving both holding them — but not all of them, since a batch
+emptied that way would silently promote itself back to claiming its codes outright.
+Saving a group with an empty pallet list un-pins it, which is the way back from a
+split short of deleting it.
 
 A closed job lands in the dashboard's **Done** fold — its own counted line under the
 groups ("N done · show"), newest close first, every row stating when it closed and when

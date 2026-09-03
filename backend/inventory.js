@@ -18,7 +18,7 @@ const { getRows, withRetry } = require('./swarmbox');
 // Only for claims(): which of a group's item codes it still matches. The rule
 // has two clauses now (a closed job claims nothing; an open one drops the codes
 // it has already shipped) and it must not be spelled out twice.
-const { claims } = require('./groups');
+const { claims, pinnedRows, pinKey, isBatch } = require('./groups');
 
 // 15 min default: pallets sit for hours-to-days, so refreshing faster just
 // re-downloads an identical snapshot — this is the app's ONLY Swarmbox load,
@@ -253,15 +253,21 @@ function itemsOnHand() {
 let stockCache = { builtAt: null, map: new Map() };
 function itemStock() {
   if (stockCache.builtAt !== snap.builtAt) {
-    const map = new Map(); // item -> { units, pallets:Set, locations:Set, cases:Map }
+    // Kept per PALLET, not just totalled per item: a group split into a batch
+    // holds named pallets, and answering "what has THAT job got" means being
+    // able to add up a subset. The '' key carries rows with no pallet id at
+    // all, which count as stock but never as a pallet.
+    const map = new Map(); // item -> { units, pallets: Map(id -> { units, cases:Map, locations:Set }) }
     for (const [code, rows] of snap.byLocation) {
       for (const r of rows) {
         let s = map.get(r.item);
-        if (!s) { s = { units: 0, pallets: new Set(), locations: new Set(), cases: new Map() }; map.set(r.item, s); }
+        if (!s) { s = { units: 0, pallets: new Map() }; map.set(r.item, s); }
         s.units++;
-        if (r.pallet) s.pallets.add(r.pallet);
-        s.locations.add(code);
-        if (r.baseUom) s.cases.set(r.baseUom, (s.cases.get(r.baseUom) || 0) + r.baseQty);
+        let p = s.pallets.get(r.pallet || '');
+        if (!p) { p = { units: 0, cases: new Map(), locations: new Set() }; s.pallets.set(r.pallet || '', p); }
+        p.units++;
+        p.locations.add(code);
+        if (r.baseUom) p.cases.set(r.baseUom, (p.cases.get(r.baseUom) || 0) + r.baseQty);
       }
     }
     stockCache = { builtAt: snap.builtAt, map };
@@ -272,17 +278,34 @@ function itemStock() {
 // The same, shaped for one group's item codes. A code with nothing on hand
 // still comes back, at zero: "there is none of this here" is precisely what
 // someone about to walk out to a bin needs told, not left off the list.
-function stockFor(codes) {
+//
+// `only` narrows it to a set of pallet ids — what a batch job holds, rather
+// than everything of that code in the building. `exclude` is the other side of
+// the same coin: (pallet, item) keys some batch has taken, which an ordinary
+// group must not go on counting after the split.
+function stockFor(codes, only, exclude) {
   const st = itemStock();
   return (codes || []).map((item) => {
     const s = st.get(item);
+    let units = 0;
+    let pallets = 0;
+    const cases = new Map();
+    const locations = new Set();
+    for (const [id, p] of (s ? s.pallets : [])) {
+      if (only && !only.has(id)) continue;
+      if (exclude && exclude.has(pinKey(id, item))) continue;
+      units += p.units;
+      if (id) pallets++;
+      for (const l of p.locations) locations.add(l);
+      for (const [uom, qty] of p.cases) cases.set(uom, (cases.get(uom) || 0) + qty);
+    }
     return {
       item,
       description: snap.itemDesc.get(item) || '',
-      units: s ? s.units : 0,
-      pallets: s ? s.pallets.size : 0,
-      cases: s ? [...s.cases.entries()].map(([uom, qty]) => ({ uom, qty })) : [],
-      locations: s ? [...s.locations].sort() : [],
+      units,
+      pallets,
+      cases: [...cases.entries()].map(([uom, qty]) => ({ uom, qty })),
+      locations: [...locations].sort(),
     };
   });
 }
@@ -387,7 +410,13 @@ function overview(groupDefs) {
     id: g.id, name: g.name, items: g.items, plan: g.plan || {},
     dates: g.dates || {}, note: g.note || '',
     family: !!g.family, closedAt: g.closedAt || null, closedBy: g.closedBy || null,
-    left: g.left || null, updatedBy: g.updatedBy, updatedAt: g.updatedAt,
+    left: g.left || null,
+    // The group record calls its pinned list `pallets`; this aggregate already
+    // uses that name for the Set of pallets FOUND. Renamed here rather than
+    // silently overwriting the count — which is exactly what it did first time.
+    batchPallets: g.pallets || null,
+    pinSet: isBatch(g) ? new Set(g.pallets) : null,
+    updatedBy: g.updatedBy, updatedAt: g.updatedAt,
     units: 0, pallets: new Set(), redPallets: new Set(), cases: new Map(), weight: new Map(),
     perItem: new Map(), // item -> { units, pallets:Set, cases:Map, weight:Map, red:Set }
   }));
@@ -398,11 +427,19 @@ function overview(groupDefs) {
   // have already shipped out of it, for exactly the same reason one size down.
   // Both still come back in the summary below, labelled, rather than vanishing —
   // finished work is a thing you should still be able to see.
+  // A group split into a batch is pinned to pallet ids, so the index by code
+  // gets it only as far as the right rows — the pallet check in the row loop
+  // does the rest. `pinned` is every (pallet, item) some open batch has taken,
+  // which is what the ordinary groups have to leave alone so one pallet is not
+  // counted under two jobs.
+  const pinned = pinnedRows(groupDefs || []);
   const groupsByItem = new Map();
-  for (const g of gAgg) for (const it of claims(g)) {
-    let arr = groupsByItem.get(it);
-    if (!arr) { arr = []; groupsByItem.set(it, arr); }
-    arr.push(g);
+  for (const g of gAgg) {
+    for (const it of claims(g)) {
+      let arr = groupsByItem.get(it);
+      if (!arr) { arr = []; groupsByItem.set(it, arr); }
+      arr.push(g);
+    }
   }
 
   for (const [code, rows] of snap.byLocation) {
@@ -469,6 +506,9 @@ function overview(groupDefs) {
       if (isRed(r)) pa.red = true;
 
       for (const g of groupsByItem.get(r.item) || []) {
+        // A batch takes its own pallets and nothing else; everyone else leaves
+        // alone the pallets a batch has already taken.
+        if (g.pinSet ? !g.pinSet.has(r.pallet) : pinned.has(pinKey(r.pallet, r.item))) continue;
         g.units++; addW(g.cases, r.baseUom, r.baseQty); addW(g.weight, r.varUom, r.varQty);
         if (r.pallet) { g.pallets.add(r.pallet); if (isRed(r)) g.redPallets.add(r.pallet); }
         let gi = g.perItem.get(r.item);
@@ -520,7 +560,8 @@ function overview(groupDefs) {
     .map((g) => ({
       id: g.id, name: g.name, items: g.items, plan: g.plan, dates: g.dates, note: g.note,
       family: g.family, closedAt: g.closedAt, closedBy: g.closedBy,
-      left: g.left, updatedBy: g.updatedBy, updatedAt: g.updatedAt,
+      left: g.left, batchPallets: g.batchPallets,
+      updatedBy: g.updatedBy, updatedAt: g.updatedAt,
       presentItems: g.perItem.size, units: g.units, pallets: g.pallets.size,
       redPallets: g.redPallets.size, cases: wArr(g.cases), weight: wArr(g.weight),
       perItem: [...g.perItem.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1)).map(([item, gi]) => ({
@@ -559,4 +600,4 @@ function start() {
 }
 
 module.exports = { start, refresh, status, searchLocations, getLocation, overview,
-  itemsOnHand, stockFor };
+  itemsOnHand, itemStock, stockFor };

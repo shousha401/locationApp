@@ -61,6 +61,7 @@ const KEEP_DATE_DAYS = 30;
 // tick is keyed by DATE — so a new group would have to be given a note
 // back-dated onto the very day its predecessor was ticked.
 const KEEP_CLOSED_HOURS = 24;
+const MAX_PALLETS = 500;
 const DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -247,7 +248,109 @@ function claims(g) {
   return g.items.filter((c) => !g.left[c]);
 }
 
-function reconcile(hasStock) {
+// ── Split batches ────────────────────────────────────────────────────────────
+// A group matches by item code, which is the right unit for "watch this
+// product" and the wrong one for "this lot goes back Wednesday". One code's
+// stock arrives in batches — pallets that went into temper on the 1st are ready
+// before the ones from the 2nd, and they are two jobs however much they share
+// an item number.
+//
+// So a group can be PINNED to a list of pallet ids: a batch job, holding
+// exactly those pallets and nothing else. split() makes one out of part of an
+// existing group. The parent keeps claiming the codes, so the next delivery
+// joins it as before — a recurring job stays recurring, and only the batch that
+// was split off is frozen.
+//
+// The two must not both count the same pallet, so a pinned pallet belongs to
+// its batch and drops out of any unpinned group that claims the same code.
+// Keyed by pallet AND item, because one physical pallet can carry two products
+// and only one of them may be the batch's.
+const pinKey = (pallet, item) => `${pallet}|${item}`;
+const isBatch = (g) => !!(g && Array.isArray(g.pallets) && g.pallets.length);
+
+// Every (pallet, item) an OPEN batch has claimed. What unpinned groups subtract.
+function pinnedRows(list) {
+  const s = new Set();
+  for (const g of (list || groups)) {
+    if (g.closedAt || !isBatch(g)) continue;
+    for (const p of g.pallets) for (const i of g.items) s.add(pinKey(p, i));
+  }
+  return s;
+}
+
+// Does this group claim this pallet line? The one rule, so the server's
+// aggregation, the board's onHand flag and the dashboard's fold cannot drift.
+function claimsRow(g, item, pallet, pinned) {
+  if (!g || g.closedAt) return false;
+  if (isBatch(g)) return g.items.includes(item) && g.pallets.includes(pallet);
+  if (!claims(g).includes(item)) return false;
+  return !pinned || !pinned.has(pinKey(pallet, item));
+}
+
+const cleanPallets = (arr) => [...new Set((Array.isArray(arr) ? arr : [])
+  .map((x) => String(x || '').trim()).filter(Boolean))].slice(0, MAX_PALLETS);
+
+// Split a batch off a group: a NEW group holding exactly these pallets, while
+// the parent carries on claiming its codes (minus these pallets, which are now
+// somebody else's). Deliberately carries no notes or dates over — a batch is a
+// job with its own schedule, and inheriting the parent's dated work would put
+// the same instruction on the board twice.
+function split(id, fields, who) {
+  const parent = get(id);
+  if (!parent) return null;
+  const f = fields || {};
+  if (parent.closedAt) return { error: 'That job is closed — reopen it before splitting it' };
+  const pallets = cleanPallets(f.pallets);
+  if (!pallets.length) return { error: 'Pick at least one pallet to split off' };
+  const items = cleanItems(f.items && f.items.length ? f.items : parent.items)
+    .filter((c) => parent.items.includes(c));
+  if (!items.length) return { error: 'Those pallets carry nothing this group claims' };
+  const name = cleanName(f.name) || `${parent.name} — batch`;
+  if (nameTaken(name, null)) return { error: `A group called '${name}' already exists` };
+  // Its own pallets don't count as taken — splitting a batch again (two temper
+  // dates inside one lot) is a legitimate thing to want.
+  const already = pinnedRows(groups.filter((x) => x.id !== parent.id));
+  const taken = pallets.filter((p) => items.some((i) => already.has(pinKey(p, i))));
+  if (taken.length) return { error: `Already split off: ${taken.slice(0, 3).join(', ')}` };
+  if (isBatch(parent)) {
+    // Splitting a batch MOVES pallets out of it, rather than leaving both
+    // holding the same ones. Taking all of them would silently promote the
+    // parent back to claiming its codes outright, which is not a split.
+    const rest = parent.pallets.filter((p) => !pallets.includes(p));
+    if (!rest.length) return { error: 'That would leave the original with nothing — rename it instead' };
+    parent.pallets = rest;
+    parent.updatedBy = who || null;
+    parent.updatedAt = new Date().toISOString();
+  }
+  const rec = { id: groups.reduce((m, g) => Math.max(m, g.id), 0) + 1,
+    name, items, pallets, plan: {}, dates: {},
+    updatedBy: who || null, updatedAt: new Date().toISOString() };
+  groups.push(rec);
+  persist();
+  return rec;
+}
+
+// Is any of this group's own stock on hand? `stock` is inventory's per-item
+// index (item -> { pallets:Set, … }). A BATCH answers for its own pallets; an
+// ordinary group answers for its codes, deliberately WITHOUT subtracting the
+// pallets it has split off — its stock is still in the building, just assigned
+// to a batch, and a parent that closed the moment it was split would stop
+// taking the next delivery, which is the opposite of what splitting is for.
+function onHandNow(g, stock) {
+  if (!g || g.closedAt || !stock) return false;
+  if (isBatch(g)) {
+    for (const p of g.pallets) {
+      for (const i of g.items) {
+        const s = stock.get(i);
+        if (s && s.pallets.has(p)) return true;
+      }
+    }
+    return false;
+  }
+  return claims(g).some((c) => stock.has(c));
+}
+
+function reconcile(stock) {
   // Aging out closed jobs rides the same clock tick: reconcile runs on every
   // read path, which is what keeps "7 days" meaning 7 days rather than
   // "whenever the process next restarts".
@@ -259,6 +362,26 @@ function reconcile(hasStock) {
     && String(g.updatedAt || '').slice(0, 10) < staleCut;
   for (const g of groups) {
     if (g.family || g.closedAt) continue;
+    // A BATCH is pinned to pallets, so it arms and closes on those and nothing
+    // else. Releasing a code from it would mean nothing — the batch IS the
+    // unit, and when its pallets ship the job is over.
+    if (isBatch(g)) {
+      const onBatch = onHandNow(g, stock);
+      if (onBatch && !g.seenStock) {
+        g.seenStock = true;
+        changed = true;
+        console.log(`[Groups] batch '${g.name}' armed — ${g.pallets.length} pallet(s) on hand`);
+      } else if (!onBatch && g.seenStock) {
+        g.closedAt = new Date().toISOString();
+        changed = true;
+        console.log(`[Groups] batch '${g.name}' closed itself — its pallets have shipped`);
+      } else if (!onBatch && isStale(g)) {
+        g.closedAt = new Date().toISOString();
+        changed = true;
+        console.log(`[Groups] batch '${g.name}' closed itself — nothing on hand, nothing scheduled, untouched for ${STALE_DAYS}+ days`);
+      }
+      continue;
+    }
     // Per CODE first: arm the ones that turn up, release the ones that go. A
     // code is only ever released once it has actually BEEN here — otherwise a
     // job written the day before its pallets land would shed its whole item
@@ -271,7 +394,7 @@ function reconcile(hasStock) {
     let perItem = false;
     for (const c of g.items) {
       if (left[c]) continue; // released — the next pallet of it is somebody else's job
-      if (hasStock.has(c)) {
+      if (stock.has(c)) {
         on = true;
         if (!seen.has(c)) {
           seen.add(c);
@@ -428,6 +551,12 @@ function update(id, patch, who) {
   }
   // An all-blank plan/dates is a legitimate edit — a manager clearing it — so
   // these replace rather than merge. Omitting a field entirely leaves it alone.
+  // Passing an empty list un-pins a batch back into an ordinary group, which is
+  // the only way back from a split short of deleting it.
+  if (patch.pallets !== undefined) {
+    const pallets = cleanPallets(patch.pallets);
+    if (pallets.length) g.pallets = pallets; else delete g.pallets;
+  }
   if (patch.plan !== undefined) g.plan = cleanPlan(patch.plan);
   if (patch.dates !== undefined) g.dates = cleanDates(patch.dates);
   if (patch.note !== undefined) {
@@ -480,5 +609,6 @@ function remove(id) {
   return g;
 }
 
-module.exports = { list, get, claims, create, update, clearDay, remove, reconcile,
-  close, reopen, restore, DAYS, KEEP_CLOSED_HOURS };
+module.exports = { list, get, claims, claimsRow, pinnedRows, pinKey, isBatch, onHandNow,
+  create, update, clearDay, remove, reconcile, close, reopen, restore, split,
+  DAYS, KEEP_CLOSED_HOURS };

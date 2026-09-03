@@ -121,31 +121,38 @@ const groupResult = (res, r, who, verb) => {
 // close every open job.
 function reconcileJobs() {
   if (!inventory.status().ok) return null;
-  const onHand = inventory.itemsOnHand();
+  // The per-item PALLET index, not just the set of codes: a batch job is pinned
+  // to pallet ids and has to be able to answer "are mine still here".
+  const stock = inventory.itemStock();
   // A snapshot with NOTHING on hand is a Swarmbox glitch until proven
   // otherwise — GT is never actually bare. Advancing jobs against it would
   // close every armed group in one tick (and closes don't undo themselves),
   // so it's treated exactly like having no snapshot at all.
-  if (!onHand.size) {
+  if (!stock.size) {
     console.warn('[Groups] reconcile skipped: snapshot reads completely empty — not closing anything');
     return null;
   }
-  groups.reconcile(onHand);
-  return onHand;
+  groups.reconcile(stock);
+  return stock;
 }
 
 app.get('/api/groups', (_req, res) => {
-  const onHand = reconcileJobs();
-  const list = onHand
+  const stock = reconcileJobs();
+  const list = stock
     // `stock` rides along so the board can print WHICH product a task is about
     // and where it sits — the codes it claims, each with its description,
     // pallet count and bins. Only when a snapshot exists, and only the claimed
     // codes: a code the job has already shipped is not what anyone is being
-    // sent to pick up.
-    ? groups.list().map((g) => {
-      const mine = groups.claims(g);
-      return { ...g, onHand: mine.some((c) => onHand.has(c)), stock: inventory.stockFor(mine) };
-    })
+    // sent to pick up. A batch answers for its own pallets, so its task row
+    // counts the lot it was split off with rather than everything of that code.
+    ? (() => {
+      const pinned = groups.pinnedRows();
+      return groups.list().map((g) => {
+        const only = groups.isBatch(g) ? new Set(g.pallets) : null;
+        return { ...g, onHand: groups.onHandNow(g, stock),
+          stock: inventory.stockFor(groups.claims(g), only, only ? null : pinned) };
+      });
+    })()
     : groups.list();
   res.json({ groups: list, days: groups.DAYS });
 });
@@ -167,6 +174,19 @@ app.post('/api/groups/:id/items/:code/restore', auth.requireEditor, (req, res) =
   if (!r) return res.status(404).json({ error: 'No such group' });
   if (r.error) return res.status(400).json({ error: r.error });
   console.log(`[Groups] ${req.user.username} put ${req.params.code} back into '${r.name}'`);
+  res.json(r);
+});
+// Split a batch off a group: the pallets that went into temper on one date are
+// a different job from the ones that went in on the next, however much they
+// share an item number. The new group is PINNED to those pallet ids; the parent
+// keeps claiming the codes, so the next delivery still joins it.
+app.post('/api/groups/:id/split', auth.requireEditor, (req, res) => {
+  const b = req.body || {};
+  const r = groups.split(req.params.id, b, req.user.username);
+  if (!r) return res.status(404).json({ error: 'No such group' });
+  if (r.error) return res.status(400).json({ error: r.error });
+  console.log(`[Groups] ${req.user.username} split '${r.name}' off group ${req.params.id}`
+    + ` (${r.pallets.length} pallet${r.pallets.length === 1 ? '' : 's'}: ${r.pallets.join(', ')})`);
   res.json(r);
 });
 // End a job now — the manual twin of the automatic close-on-ship, for the job
