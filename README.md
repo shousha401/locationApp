@@ -157,9 +157,11 @@ The first thing on the feed and the dashboard, read top to bottom:
    date, and its **✓** ticks it off **on that date**, not today.
 3. **▸ Up next**, then **Also today** — today's open tasks, the first one full-size.
    Every task row **spells the job out**: under the note, each item code the group
-   claims, with its description, how much is on hand (pallets and cases) and the bins
-   it is in — plus the group's standing note, repeated there, when the row is a dated
-   one. A task is a group and a note, which says what to do but not what to pick up or
+   claims, with its description, how much is on hand (pallets and cases), and **which
+   pallet, in which bin** — paired, four of them before it says "+N more", so nobody
+   has to match an id against a bin in their head standing in front of a rack. A job
+   often names one exact pallet, and a batch group holds exactly one. Plus the group's
+   standing note, repeated there, when the row is a dated one. A task is a group and a note, which says what to do but not what to pick up or
    where it sits: "Pr Ribeyes → send 10 cases to CMP" sends whoever reads it off to
    find out what a Pr Ribeye is. (Managers had started typing item numbers into the
    day note by hand — the same information arriving the long way round.) A code with

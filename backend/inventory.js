@@ -291,12 +291,19 @@ function stockFor(codes, only, exclude) {
     let pallets = 0;
     const cases = new Map();
     const locations = new Set();
+    // Each pallet with the bin it is in, kept PAIRED. A task often names one
+    // exact pallet ("send 10 cases to CMP - exact pallet"), and a list of ids
+    // beside a separate list of bins makes the reader do the matching standing
+    // in front of a rack. Rows with no pallet id still count as stock but are
+    // not a pallet anyone can be sent to.
+    const ids = [];
     for (const [id, p] of (s ? s.pallets : [])) {
       if (only && !only.has(id)) continue;
       if (exclude && exclude.has(pinKey(id, item))) continue;
       units += p.units;
-      if (id) pallets++;
-      for (const l of p.locations) locations.add(l);
+      const at = [...p.locations].sort();
+      if (id) { pallets++; ids.push({ id, at: at.join(' · ') }); }
+      for (const l of at) locations.add(l);
       for (const [uom, qty] of p.cases) cases.set(uom, (cases.get(uom) || 0) + qty);
     }
     return {
@@ -304,6 +311,7 @@ function stockFor(codes, only, exclude) {
       description: snap.itemDesc.get(item) || '',
       units,
       pallets,
+      palletIds: ids.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : a.id < b.id ? -1 : 1)),
       cases: [...cases.entries()].map(([uom, qty]) => ({ uom, qty })),
       locations: [...locations].sort(),
     };

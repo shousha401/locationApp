@@ -141,6 +141,9 @@
     .tb-desc { color:var(--muted); }
     .tb-amt { font-weight:800; color:var(--good); white-space:nowrap; }
     .tb-where { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--accent); }
+    /* The pallet id reads louder than the bin beside it: on a job naming one
+       exact pallet, that number is the thing being looked for. */
+    .tb-plt { color:var(--text); font-weight:800; }
     /* A code with nothing behind it stays on the list and says so — leaving it
        off would read as "this one is fine", which is the opposite of true. */
     .tb-si-out .tb-code, .tb-si-out .tb-desc { opacity:.55; }
@@ -575,11 +578,31 @@
     // was managers typing item numbers into the day note by hand. `stock` is
     // absent until the first snapshot lands, so a cold start prints nothing
     // here rather than claiming a group is empty.
+    // How many pallet · bin pairs a row prints before it stops counting them
+    // out. Four fits the line; past that the number is the useful part and the
+    // full list is a walk to the rack away.
     const LOCS_SHOWN = 4;
     const fmtQty = (n) => (Math.abs(n % 1) < 1e-9 ? Math.round(n).toLocaleString()
       : n.toLocaleString(undefined, { maximumFractionDigits: 2 }));
     const amount = (s) => [`${s.pallets} plt`]
       .concat((s.cases || []).map((c) => `${fmtQty(c.qty)} ${c.uom}`)).join(' · ');
+    // Which pallet, and where it is — as pairs, so nobody has to match an id
+    // against a bin in their head. Falls back to the bins alone when the API
+    // hasn't been restarted yet and `palletIds` is missing: an older answer
+    // should read as it used to, not blank.
+    function palletsWhere(s) {
+      const ids = s.palletIds || [];
+      if (!ids.length) {
+        const locs = s.locations || [];
+        return `<span class="tb-where">${esc(locs.slice(0, LOCS_SHOWN).join('  ·  '))}${
+          locs.length > LOCS_SHOWN ? ` +${locs.length - LOCS_SHOWN} more` : ''}</span>`;
+      }
+      return ids.slice(0, LOCS_SHOWN).map((p) => `<span class="tb-where">`
+        + `<b class="tb-plt">${esc(p.id)}</b>${p.at ? ` · ${esc(p.at)}` : ''}</span>`).join('')
+        + (ids.length > LOCS_SHOWN
+          ? `<span class="tb-where">+${ids.length - LOCS_SHOWN} more</span>` : '');
+    }
+
     function taskDetail(t) {
       const st = t.g.stock || [];
       // The standing note IS its own row further down the list; repeating it
@@ -595,8 +618,7 @@
           ${s.description ? `<span class="tb-desc">${esc(s.description)}</span>` : ''}
           ${s.pallets
             ? `<span class="tb-amt">${esc(amount(s))}</span>
-               <span class="tb-where">${esc(s.locations.slice(0, LOCS_SHOWN).join('  ·  '))}${
-                 s.locations.length > LOCS_SHOWN ? ` +${s.locations.length - LOCS_SHOWN} more` : ''}</span>`
+               ${palletsWhere(s)}`
             : '<span class="tb-none-amt">none on hand</span>'}
         </div>`).join('')}</div>`;
     }
