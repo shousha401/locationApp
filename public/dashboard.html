@@ -165,6 +165,16 @@
       border-bottom:1px solid rgba(51,65,85,.45); font-size:13px; }
     .pick:last-child { border-bottom:0; }
     .pick:hover { background:rgba(56,189,248,.06); }
+    /* A product opened up into its own pallets. Indented and quieter than the
+       product line, because picking one of these is the exception — the normal
+       answer is still "this whole item code". */
+    .pick.pickplt { padding-left:34px; background:rgba(15,23,42,.5); font-size:12px; }
+    .pick.pickplt .mono { color:var(--accent); }
+    .pickexp { margin-left:auto; white-space:nowrap; }
+    /* Says out loud that ticking pallets changed what the group IS. */
+    .pickbatch { display:flex; align-items:baseline; gap:9px; flex-wrap:wrap; margin-top:8px;
+      padding:8px 12px; border-radius:8px; font-size:12px; line-height:1.45;
+      color:var(--warn); border:1px solid rgba(251,191,36,.4); background:rgba(251,191,36,.08); }
     .pick .mono { min-width:64px; }
     .pick .desc { flex:1; }
     .mixflag { color:var(--warn); font-size:11px; cursor:help; }
@@ -319,6 +329,7 @@
     <input type="text" id="gname" placeholder="Group name — what the floor calls these" maxlength="60">
     <div class="zones" id="gpicktabs" style="margin-bottom:9px"></div>
     <div class="picklist" id="gpick"></div>
+    <div id="gbatchnote"></div>
     <label class="gjob"><input type="checkbox" id="gfamily">
       <span><b>Product family</b> — keeps collecting: every <b>new</b> delivery of these item codes joins
       this group automatically, and it never closes itself. Leave this OFF for a normal job — a job closes
@@ -538,6 +549,18 @@
     // has two tabs (products / mixed pallets), and switching tabs rebuilds the
     // checkboxes — ticks have to survive that.
     let CHOSEN = new Set();
+    // Pallet ids ticked individually. Two pallets of one code can be two jobs —
+    // different temper dates, different days out — and an item code cannot say
+    // which one you meant, so the picker opens a product up and lets you take
+    // one pallet. Any tick in here makes the group a BATCH: it holds exactly
+    // these pallets, and new deliveries of the same code do not join it.
+    let PICKED = new Set();
+    let PICK_OPEN = new Set(); // which products are expanded to their pallets
+    const inBatchMode = () => PICKED.size > 0;
+    // One row per pallet of this code, newest state first — the since date is
+    // what someone is picking on.
+    const palletsOf = (item) => INV.filter((p) => p.item === item && p.pallet)
+      .sort((a, b) => cmpStr(b.stateDate, a.stateDate) || cmpStr(a.pallet, b.pallet));
     let PICK_TAB = 'products';
 
     // The on-hand products no OPEN group claims — the picker's version of All
@@ -560,8 +583,30 @@
         <button type="button" class="zbtn ${PICK_TAB === 'mixed' ? 'on' : ''}" data-picktab="mixed">⚠ Mixed pallets${n ? ` · ${fmtInt(n)}` : ''}</button>`;
     }
 
+    // Ticking a pallet re-renders the list (the product line above it changes
+    // too), and the list is a scroll box — so put it back where it was.
+    function repick() {
+      const box = $('gpick');
+      const top = box.scrollTop;
+      renderPick();
+      box.scrollTop = top;
+    }
+
+    // Says out loud that ticking pallets changed what the group IS, and offers
+    // the way back. Without this a batch is a silent mode you can fall into by
+    // ticking one box.
+    function renderBatchNote() {
+      const n = PICKED.size;
+      $('gbatchnote').innerHTML = !n ? '' : `
+        <div class="pickbatch"><b>Batch — ${fmtInt(n)} pallet${n === 1 ? '' : 's'}.</b>
+          This group holds exactly these pallets. New deliveries of the same item codes will
+          <b>not</b> join it, and it closes itself once these pallets ship.
+          <button type="button" class="link" id="gbatchclear">take the whole item codes instead</button></div>`;
+    }
+
     function renderPick() {
       renderPickTabs();
+      renderBatchNote();
       if (PICK_TAB === 'mixed') {
         // One row per mixed pallet; ticking it takes every product on that
         // pallet into the group in one go (groups are made of item codes, so
@@ -586,13 +631,41 @@
       // its row under the group in All inventory.
       const gEdit = EDIT_ID != null ? (GROUPS || []).find((x) => x.id === EDIT_ID) : null;
       const releasedHere = new Set(Object.keys((gEdit && !gEdit.closedAt && gEdit.left) || {}));
-      const row = (p) => `
-        <label class="pick"><input type="checkbox" value="${esc(p.item)}" ${CHOSEN.has(p.item) ? 'checked' : ''}>
+      // Pallets another batch already holds. One pallet belongs to one job, so
+      // they are shown named and un-tickable rather than left to fail on save.
+      const heldBy = new Map();
+      for (const x of (GROUPS || [])) {
+        if (x.closedAt || !isBatch(x) || x.id === EDIT_ID) continue;
+        for (const p of x.batchPallets) if (!heldBy.has(p)) heldBy.set(p, x.name);
+      }
+      const row = (p) => {
+        const pals = palletsOf(p.item);
+        const mine = pals.filter((x) => PICKED.has(x.pallet)).length;
+        const open = PICK_OPEN.has(p.item);
+        // In batch mode the product tick means "every pallet of it" — the group
+        // holds pallets now, so there is one source of truth rather than two
+        // that can disagree.
+        const checked = inBatchMode() ? (pals.length > 0 && mine === pals.length) : CHOSEN.has(p.item);
+        return `
+        <label class="pick"><input type="checkbox" value="${esc(p.item)}" ${checked ? 'checked' : ''}>
           <span class="mono">${esc(p.item)}</span>
           ${releasedHere.has(p.item) ? '<span class="gshipped" title="This job already shipped this product, so it no longer picks up stock of it. Put it back from the group\'s row under All inventory.">shipped</span>' : ''}
           ${mixedItems.has(p.item) ? '<span class="mixflag" title="Shares a pallet with another product — see the ⚠ Mixed pallets tab">⚠</span>' : ''}
           <span class="desc">${esc(p.description)}</span>
-          <span class="desc">${fmtInt(p.pallets)} plt</span></label>`;
+          ${mine && mine < pals.length ? `<span class="gjobchip" title="Some of this product's pallets are picked, not all of them">${fmtInt(mine)} of ${fmtInt(pals.length)}</span>` : ''}
+          ${pals.length ? `<button type="button" class="link pickexp" data-exp="${esc(p.item)}"
+              title="Open this product up into its pallets — so one temper batch can be picked without the other">${fmtInt(pals.length)} plt ${open ? '▾' : '▸'}</button>`
+            : `<span class="desc" style="margin-left:auto">${fmtInt(p.pallets)} plt</span>`}</label>`
+        + (!open ? '' : pals.map((x) => `
+        <label class="pick pickplt"><input type="checkbox" data-pickplt="${esc(x.pallet)}"
+            ${PICKED.has(x.pallet) ? 'checked' : ''} ${heldBy.has(x.pallet) ? 'disabled' : ''}>
+          <span class="mono">${esc(x.pallet)}</span>
+          <span class="desc">${esc(x.state || '')} since ${esc(x.stateDate || '—')}</span>
+          <span class="desc mono">${esc(x.locations.join(' · '))}</span>
+          ${heldBy.has(x.pallet)
+            ? `<span class="gjobchip" style="margin-left:auto" title="One pallet belongs to one job. Remove it from that group first.">in "${esc(heldBy.get(x.pallet))}"</span>`
+            : `<span class="desc" style="margin-left:auto">received ${esc(x.date || '—')}</span>`}</label>`).join(''));
+      };
       if (PICK_TAB === 'unassigned') {
         // Only the unclaimed stock — the list a new group is usually built
         // from, which is why openEditor() starts a NEW group on this tab.
@@ -617,9 +690,46 @@
       PICK_TAB = b.dataset.picktab;
       renderPick();
     });
+    // The expander lives inside the label, so its click would otherwise tick
+    // the product's own box on the way past.
+    $('gpick').addEventListener('click', (e) => {
+      const b = e.target.closest('[data-exp]');
+      if (!b) return;
+      e.preventDefault();
+      const it = b.dataset.exp;
+      if (PICK_OPEN.has(it)) PICK_OPEN.delete(it); else PICK_OPEN.add(it);
+      repick();
+    });
+    $('gbatchnote').addEventListener('click', (e) => {
+      if (!e.target.closest('#gbatchclear')) return;
+      // Back to item codes: keep the products, drop the pallet-level pinning.
+      for (const p of INV) if (PICKED.has(p.pallet)) CHOSEN.add(p.item);
+      PICKED.clear();
+      repick();
+    });
     $('gpick').addEventListener('change', (e) => {
       const cb = e.target.closest('input[type=checkbox]');
       if (!cb) return;
+      if (cb.dataset.pickplt) {
+        // The first individual pallet tick turns the group into a batch.
+        // Anything already picked as a whole item code comes along, expanded
+        // into its pallets — dropping it silently would lose real work.
+        if (!inBatchMode() && CHOSEN.size) {
+          for (const c of CHOSEN) for (const x of palletsOf(c)) PICKED.add(x.pallet);
+          CHOSEN.clear();
+        }
+        if (cb.checked) PICKED.add(cb.dataset.pickplt); else PICKED.delete(cb.dataset.pickplt);
+        repick();
+        return;
+      }
+      if (cb.value && inBatchMode()) {
+        // In batch mode a product row stands for all of its pallets.
+        for (const x of palletsOf(cb.value)) {
+          if (cb.checked) PICKED.add(x.pallet); else PICKED.delete(x.pallet);
+        }
+        repick();
+        return;
+      }
       if (cb.dataset.pallet) {
         // A pallet row stands for all its products at once.
         const mg = mixedPalletGroups(INV).find((x) => x.pallet === cb.dataset.pallet);
@@ -709,7 +819,11 @@
       // close, a closed one gets the Reopen banner instead, and a family never
       // closes at all.
       $('gclose').classList.toggle('hidden', !g || !!g.closedAt || !!g.family);
-      CHOSEN = new Set(g ? g.items : []);
+      // A batch is held as pallets, not codes — loading its item codes into
+      // CHOSEN as well would save it back as an ordinary group.
+      CHOSEN = new Set(g && !isBatch(g) ? g.items : []);
+      PICKED = new Set((g && g.batchPallets) || []);
+      PICK_OPEN = new Set();
       // A NEW group is almost always built from the unclaimed stock, so start
       // there (when there is any). Editing starts on All products, where the
       // group's current items are guaranteed to be in view.
@@ -787,7 +901,13 @@
 
     $('gsave').addEventListener('click', async () => {
       const name = $('gname').value.trim();
-      const items = [...CHOSEN];
+      // A batch saves the pallets it holds, and reads its item codes off them so
+      // the two can never disagree. An empty list is sent deliberately: it is
+      // what un-pins a group that used to be a batch.
+      const pallets = [...PICKED];
+      const items = pallets.length
+        ? [...new Set(INV.filter((p) => PICKED.has(p.pallet)).map((p) => p.item))]
+        : [...CHOSEN];
       if (DCAL_SELECTED) DATE_NOTES[DCAL_SELECTED] = $('gdnote').value.trim(); // capture the open box
       const dates = { ...DATE_NOTES };
       const url = EDIT_ID != null ? '/api/groups/' + EDIT_ID : '/api/groups';
@@ -796,8 +916,10 @@
       const res = await fetch(url, {
         method: EDIT_ID != null ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, items, plan: {}, dates,
-          note: $('gnote').value.trim(), family: $('gfamily').checked }),
+        // A batch is never a family: "keeps collecting" and "holds exactly
+        // these pallets" are opposite instructions.
+        body: JSON.stringify({ name, items, pallets, plan: {}, dates,
+          note: $('gnote').value.trim(), family: pallets.length ? false : $('gfamily').checked }),
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok) { $('gerrbox').textContent = j.error || 'Could not save.'; return; }

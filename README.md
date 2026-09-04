@@ -247,8 +247,23 @@ went into temper on the 1st are ready before the ones from the 2nd — two jobs,
 much they share an item number. Nothing about a code can tell them apart.
 
 So a group can be **pinned to a list of pallet ids**: a *batch*, holding exactly those
-pallets and nothing else. **split off** on a since-date band inside a group makes one
-out of that band. The new group carries a `batch · N plt` chip; the parent keeps its
+pallets and nothing else. There are two ways to get one. **split off** on a since-date
+band inside an existing group makes one out of that band. Or build it that way from
+the start: in the group editor every product row opens up (**"2 plt ▸"**) into its own
+pallets — pallet id, state and since date, bin, received date — and ticking one pins
+the group to it. The picker used to offer whole item codes only, which is no help when
+a product's two pallets are two jobs; `071101 · 2 plt` says nothing about one of them
+tempering since the 31st and the other since the 2nd.
+
+Ticking a pallet says so, in a banner under the list: the group is a batch now, new
+deliveries of the same codes will not join it, and one click takes the whole item codes
+back instead. Anything already picked as a whole code is expanded into its pallets
+rather than dropped. In batch mode a product's own tick means "all of its pallets", so
+there is one source of truth rather than two that can disagree, and a batch is never a
+*family* — "keeps collecting" and "holds exactly these pallets" are opposite
+instructions. One pallet belongs to one job: pallets another batch already holds are
+shown named and un-tickable, and the server refuses them too. Picking a pallet takes
+everything riding on it, so a mixed pallet brings its second product's code along. The new group carries a `batch · N plt` chip; the parent keeps its
 item codes, so **the next delivery still lands in the parent** and only the batch that
 was split off is frozen. A batch takes no notes or dates from its parent — it has its
 own schedule, and inheriting the parent's dated work would put one instruction on the

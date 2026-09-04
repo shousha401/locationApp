@@ -290,6 +290,23 @@ function claimsRow(g, item, pallet, pinned) {
 const cleanPallets = (arr) => [...new Set((Array.isArray(arr) ? arr : [])
   .map((x) => String(x || '').trim()).filter(Boolean))].slice(0, MAX_PALLETS);
 
+// One pallet belongs to one batch. Two groups holding the same one would both
+// count it and both wait for it to ship, which is the double-counting the whole
+// pinning scheme exists to prevent — so it is refused rather than reconciled.
+// Returns an error string, or null when the pallets are free.
+function takenPallets(pallets, items, exceptId) {
+  if (!pallets.length) return null;
+  const already = pinnedRows(groups.filter((x) => x.id !== exceptId));
+  const owner = new Map();
+  for (const g of groups) {
+    if (g.closedAt || !isBatch(g) || g.id === exceptId) continue;
+    for (const p of g.pallets) if (!owner.has(p)) owner.set(p, g.name);
+  }
+  const taken = pallets.filter((p) => (items || []).some((i) => already.has(pinKey(p, i))));
+  if (!taken.length) return null;
+  return `Already in another group: ${taken.slice(0, 3).map((p) => `${p} (${owner.get(p) || '?'})`).join(', ')}`;
+}
+
 // Split a batch off a group: a NEW group holding exactly these pallets, while
 // the parent carries on claiming its codes (minus these pallets, which are now
 // somebody else's). Deliberately carries no notes or dates over — a batch is a
@@ -307,11 +324,10 @@ function split(id, fields, who) {
   if (!items.length) return { error: 'Those pallets carry nothing this group claims' };
   const name = cleanName(f.name) || `${parent.name} — batch`;
   if (nameTaken(name, null)) return { error: `A group called '${name}' already exists` };
-  // Its own pallets don't count as taken — splitting a batch again (two temper
-  // dates inside one lot) is a legitimate thing to want.
-  const already = pinnedRows(groups.filter((x) => x.id !== parent.id));
-  const taken = pallets.filter((p) => items.some((i) => already.has(pinKey(p, i))));
-  if (taken.length) return { error: `Already split off: ${taken.slice(0, 3).join(', ')}` };
+  // The parent's own pallets don't count as taken — splitting a batch again
+  // (two temper dates inside one lot) is a legitimate thing to want.
+  const clash = takenPallets(pallets, items, parent.id);
+  if (clash) return { error: clash };
   if (isBatch(parent)) {
     // Splitting a batch MOVES pallets out of it, rather than leaving both
     // holding the same ones. Taking all of them would silently promote the
@@ -521,6 +537,14 @@ function create(fields, who) {
   const id = groups.reduce((m, g) => Math.max(m, g.id), 0) + 1;
   const rec = { id, name, items, plan: cleanPlan(f.plan), dates: cleanDates(f.dates),
     updatedBy: who || null, updatedAt: new Date().toISOString() };
+  // A group can be born a BATCH — pinned to named pallets — rather than having
+  // to be created whole and split afterwards. Same thing split() produces: two
+  // pallets of one code with different temper dates are two jobs, and the
+  // picker is where someone notices that in the first place.
+  const pallets = cleanPallets(f.pallets);
+  const clash = takenPallets(pallets, items, null);
+  if (clash) return { error: clash };
+  if (pallets.length) rec.pallets = pallets;
   const standing = cleanNote(f.note);
   if (standing) rec.note = standing; // absent rather than empty, so `g.note` alone answers "has one"
   if (f.family) rec.family = true;
@@ -555,6 +579,8 @@ function update(id, patch, who) {
   // the only way back from a split short of deleting it.
   if (patch.pallets !== undefined) {
     const pallets = cleanPallets(patch.pallets);
+    const clash = takenPallets(pallets, g.items, g.id);
+    if (clash) return { error: clash };
     if (pallets.length) g.pallets = pallets; else delete g.pallets;
   }
   if (patch.plan !== undefined) g.plan = cleanPlan(patch.plan);
