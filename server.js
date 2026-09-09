@@ -66,6 +66,12 @@ app.get('/api/locations', (req, res) => {
   res.json({ ...inventory.status(), matches: inventory.searchLocations(req.query.q, 50) });
 });
 
+// How full the rack is — total slots, used, free, and the free bins in walking
+// order. Every other inventory read describes stock, so none of them can answer
+// "where do I put this pallet": an empty bin sends back no rows and simply isn't
+// in the snapshot. The rack list lives in backend/slots.js.
+app.get('/api/slots', (_req, res) => res.json(inventory.slotCapacity()));
+
 // One location's contents (grouped by item) + its notes/flags.
 app.get('/api/location/:code', (req, res) => {
   const loc = inventory.getLocation(req.params.code);

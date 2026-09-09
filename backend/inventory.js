@@ -15,6 +15,7 @@
 const fs = require('fs');
 const path = require('path');
 const { getRows, withRetry } = require('./swarmbox');
+const slots = require('./slots');
 // Only for claims(): which of a group's item codes it still matches. The rule
 // has two clauses now (a closed job claims nothing; an open one drops the codes
 // it has already shipped) and it must not be spelled out twice.
@@ -583,6 +584,10 @@ function overview(groupDefs) {
     ok: snap.ok, builtAt: snap.builtAt, prefix: PREFIX,
     totals: { units, pallets: allPallets.size, products: allProducts.size,
       locations: locations.length, weight: wArr(totalsW) },
+    // `totals.locations` counts bins IN USE — the only thing the feed can see.
+    // `slots` is the other half of that sentence: how many bins there are, so
+    // "40 locations" can finally be read as "40 of 80, 40 free".
+    slots: slots.capacity(locations, PREFIX),
     states: [...states.values()]
       .sort((a, b) => b.units - a.units)
       .map((s) => ({ state: s.state, units: s.units, pallets: s.pallets.size, weight: wArr(s.weight) })),
@@ -607,5 +612,23 @@ function start() {
   if (timer.unref) timer.unref();
 }
 
+
+// How full the rack is: every slot that EXISTS, marked used or free.
+//
+// The snapshot only ever contains occupied bins (an empty one has no rows to
+// return), so this is the one number on the dashboard that cannot come from the
+// feed alone — see slots.js for the rack itself. Kept as its own cheap read,
+// not just a corner of overview(), because the Today board wants the headline
+// counts on a page that never loads the full aggregation.
+function slotCapacity() {
+  const rows = [];
+  for (const [code, list] of snap.byLocation) {
+    const p = new Set();
+    for (const r of list) if (r.pallet) p.add(r.pallet);
+    rows.push({ code, pallets: p.size });
+  }
+  return { ok: snap.ok, builtAt: snap.builtAt, ...slots.capacity(rows, PREFIX) };
+}
+
 module.exports = { start, refresh, status, searchLocations, getLocation, overview,
-  itemsOnHand, itemStock, stockFor };
+  itemsOnHand, itemStock, stockFor, slotCapacity };
