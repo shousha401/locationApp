@@ -110,6 +110,13 @@
     .tb-count.tb-c-open { color:var(--accent2); border-color:rgba(34,211,238,.45); background:rgba(34,211,238,.09); }
     .tb-count.tb-c-late { color:var(--err); border-color:rgba(248,113,113,.5); background:rgba(248,113,113,.1); }
     .tb-count.tb-c-done { color:var(--good); border-color:rgba(52,211,153,.4); background:rgba(52,211,153,.08); }
+    /* Rack space. Neutral while there is room and amber once it runs short —
+       never red: a full rack is a normal busy day, not a fault. The rack size
+       rides along in small type because "41 free" only means something when you
+       can see what it is 41 out of. */
+    .tb-count.tb-c-slots { color:var(--text); border-color:var(--line); }
+    .tb-count.tb-c-slots.tb-tight { color:var(--warn); border-color:rgba(251,191,36,.45); background:rgba(251,191,36,.09); }
+    .tb-count .tb-of { font-size:10px; font-weight:700; opacity:.72; letter-spacing:.04em; }
     .tb-grow { flex:1 1 auto; }
 
     .tb-g { font-weight:700; }
@@ -337,6 +344,7 @@
   let DONE = {};              // task key -> { by, at } for today
   let RANGE = {};             // date -> { key: {by,at} } for today..today+HORIZON
   let NOTES = {};             // date -> { text, by, at } for today..today+HORIZON
+  let SLOTS = null;           // rack capacity (/api/slots); null until it answers
   let SHOW_DONE = false;      // is the "N done today" list expanded
   let BUSY = false;           // a tick/clear is in flight — don't double-fire
   const isMgr = () => ME.role === 'editor' || ME.role === 'admin';
@@ -404,14 +412,19 @@
     start.setDate(start.getDate() - LOOKBACK);
     const end = new Date();
     end.setDate(end.getDate() + HORIZON);
-    const [g, t] = await Promise.all([
+    // Rack capacity rides along in the same round trip. It is allowed to fail on
+    // its own: the board's job is the task list, and "how full is the rack" going
+    // missing must not take the day's work down with it.
+    const [g, t, sl] = await Promise.all([
       fetch('/api/groups').then((r) => r.json()),
       fetch(`/api/today?date=${date}&from=${ymd(start)}&to=${ymd(end)}`).then((r) => r.json()),
+      fetch('/api/slots').then((r) => r.json()).catch(() => null),
     ]);
     GROUPS = (g && g.groups) || [];
     DONE = (t && t.done) || {};
     RANGE = (t && t.doneRange) || {};
     NOTES = (t && t.notes) || {};
+    SLOTS = (sl && sl.ok && sl.applies && sl.total) ? sl : null;
   }
 
   // Everything from the last LOOKBACK days that never got a ✓, oldest first.
@@ -633,6 +646,10 @@
           <span class="tb-count${open.length ? ' tb-c-open' : ''}"><b>${open.length}</b> to do today</span>
           ${late.length ? `<span class="tb-count tb-c-late"><b>${late.length}</b> not done</span>` : ''}
           ${done.length ? `<span class="tb-count tb-c-done"><b>${done.length}</b> done</span>` : ''}
+          ${SLOTS ? `<span class="tb-count tb-c-slots${SLOTS.free <= SLOTS.total * 0.15 ? ' tb-tight' : ''}"
+            title="${esc(SLOTS.used)} of ${esc(SLOTS.total)} rack slots hold stock">
+            <b>${SLOTS.free}</b> ${SLOTS.free === 1 ? 'slot' : 'slots'} free
+            <span class="tb-of">of ${SLOTS.total}</span></span>` : ''}
         </div>
         <div class="tb-grow"></div>
         <button class="tb-btn" id="tb-cal-open">📅 Month</button>

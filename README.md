@@ -72,6 +72,8 @@ not per user — the cost lands on Swarmbox, which doesn't care which of us aske
 
 - `backend/swarmbox.js` — PostgREST client (retries, circuit breaker, timeouts), lifted from valueTool.
 - `backend/inventory.js` — the snapshot: pull → index by location; also the dashboard's `overview()` aggregates.
+- `backend/slots.js` — the rack itself: which bins **exist**. The one fact in this app
+  that cannot come from Swarmbox — see **Rack space** below.
 - `backend/notes.js` — the app's own notes/flags layer (never writes to Swarmbox).
 - `backend/requests.js` — the build-queue thread (`data/requests.json`).
 - `backend/groups.js` — manager-named product groups (`data/product-groups.json`), each
@@ -351,6 +353,60 @@ without that, a group given a new date every week accumulates a permanent list o
 finished jobs, and the editor shows every one of them as though it were still pending.
 Future dates are never pruned. The carry-over looks back seven days, inside the tick
 retention, so a task can never outlive the ✓ that would have cleared it.
+
+## Rack space — how many slots, and which are free
+
+Every other number in this app is computed from the Swarmbox snapshot, and the
+snapshot is a list of **pallets**: `inventory_detail` returns a row per pallet, indexed
+by the bin it sits in. An empty bin has no pallets, so it returns no rows, so it is not
+in the snapshot at all — not shown as empty, *absent*, indistinguishable from a bin that
+was never built. That makes "how many slots are free" a question the feed structurally
+cannot answer however carefully you read it. The dashboard's `Locations w/ stock` tile
+has always been exactly what it says: bins **in use**.
+
+Swarmbox has no bin master to ask either — its API exposes demand, customers, vendors,
+inventory and production, and nothing that enumerates racking. So the rack list lives
+here, in `backend/slots.js`. It is a physical fact about the GT freezer, and it changes
+only when someone builds or removes racking.
+
+**GT is 80 slots**, `GT.2.Z{1-5}.{A-D}{01-04}` — five zones, four rows, four deep —
+plus one floor spot, `GT.2.Z6.FLOR`. Two independent readings agree on that number:
+
+- Across **4,871 logged snapshots** since 2026-07-20, the distinct-bin count peaked at
+  exactly **81** and sat at **80** more often than any other value. Never higher.
+- The codes in use form a complete Z1–Z5 × A–D × 01–04 lattice — Z3 has been seen full,
+  A01 through D04 — plus the one floor code. 80 + floor = the 81 ceiling, from both ends.
+
+The floor is tracked and reported **beside** the totals, never inside them: it has no
+fixed capacity, so counting it as an 81st slot would make "79 of 80 full" mean something
+different depending on where the last pallet happened to land.
+
+Two guards, because a confidently-wrong capacity is worse than none:
+
+- **A bin in use that the rack list doesn't know** comes back under `unknown` and is
+  printed on the panel in amber, rather than being quietly dropped. The failure mode
+  worth catching loudly is the rack growing while the app keeps reporting 80.
+- **A non-GT `LOCATION_PREFIX`** sets `applies:false` and the panel hides itself. The
+  grid describes GT; printing "39 of 80" over a warehouse this file knows nothing about
+  would be worse than saying nothing.
+
+Where it shows:
+
+- **The Today board**, as one more count beside the day's tasks — `41 slots free of 80`
+  — on the feed and the dashboard alike. It goes amber under 15% free. Never red: a full
+  rack is a normal busy day, not a fault.
+- **The dashboard's Rack space panel**, drawing every slot whether or not it holds
+  anything. Cells sit in rack order (row A at the top, position 01 at the left) so
+  reading it is the same motion as looking down the aisle, and full/empty is solid vs
+  dashed as well as coloured — it gets read across a room. Tapping a full bin opens it
+  in **All locations** below, which is where its contents already live; the map says
+  where to look, it doesn't duplicate the table.
+
+`GET /api/slots` serves it on its own (totals, per-zone, and the free bins in walking
+order) so the board can have the headline counts on a page that never loads the full
+`overview()` aggregation. It rides along in `/api/overview` as `slots` too, computed
+from the same per-location rows the location list is drawn from, so the map and the
+list can never disagree about which bin holds what.
 
 ## The requests channel
 

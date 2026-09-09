@@ -107,6 +107,40 @@
     .selsum { font-size:12px; color:var(--muted); margin-top:8px; }
     .selsum b { color:var(--text); }
     .count { font-size:11px; color:var(--muted); text-transform:none; letter-spacing:0; }
+
+    /* The rack map. Every slot is drawn whether or not it holds anything —
+       that is the entire point of the panel: the inventory feed can only ever
+       describe stock, so an empty bin has never been visible anywhere in this
+       app. Reading it is meant to be the same motion as looking down the aisle,
+       so the cells sit in rack order (row A at the top, position 01 at the
+       left) rather than in any sorted-by-fullness order. */
+    .rackbody { display:flex; flex-wrap:wrap; gap:14px; padding:14px 16px 4px; }
+    .rackzone { border:1px solid var(--line); border-radius:10px; padding:9px 10px 10px; background:var(--panel2); }
+    .rackzone h3 { margin:0 0 8px; font-size:11px; letter-spacing:.07em; text-transform:uppercase;
+      color:var(--muted); display:flex; align-items:baseline; gap:7px; }
+    .rackzone h3 b { color:var(--text); font-size:12px; letter-spacing:.04em; }
+    .rackrow { display:flex; align-items:center; gap:5px; margin-bottom:5px; }
+    .rackrow:last-child { margin-bottom:0; }
+    .racklabel { width:11px; font-size:10px; font-weight:800; color:var(--muted); }
+    /* Free cells are dashed and hollow, full ones solid: full/empty has to be
+       readable at a glance and without relying on colour alone, because this
+       gets read across a room and by people who do not all see colour the same. */
+    .rackcell { width:30px; height:26px; border-radius:6px; display:flex; align-items:center; justify-content:center;
+      font-size:10px; font-weight:700; border:1px solid var(--line);
+      background:transparent; color:var(--muted); border-style:dashed; padding:0; font-family:inherit; }
+    .rackcell.on { border-style:solid; border-color:rgba(34,211,238,.5); background:rgba(34,211,238,.13); color:var(--accent2); }
+    button.rackcell { cursor:pointer; }
+    button.rackcell:hover { border-color:var(--accent); color:var(--accent); }
+    .rackfoot { display:flex; flex-wrap:wrap; align-items:center; gap:8px 16px;
+      padding:4px 16px 14px; font-size:11px; color:var(--muted); }
+    .rackkey { display:inline-flex; align-items:center; gap:6px; }
+    .rackkey i { width:16px; height:13px; border-radius:4px; border:1px solid var(--line); border-style:dashed; }
+    .rackkey.on i { border-style:solid; border-color:rgba(34,211,238,.5); background:rgba(34,211,238,.13); }
+    .rackfloor { color:var(--text); }
+    /* An occupied bin this app has never heard of means the rack list in
+       backend/slots.js is out of date, which would make every count on this
+       panel quietly wrong. Say so loudly rather than dropping the bin. */
+    .rackodd { color:var(--warn); }
     .hidden { display:none; }
     tr.lsub td { background:var(--panel2); font-size:12px; padding-top:5px; padding-bottom:5px; }
     /* Inline location breakdown: a nested table so the split-by-product numbers
@@ -295,6 +329,12 @@
       Missing the number you actually need? Say so on the <a href="/requests.html">💬 Requests</a> page and it gets built.</div>
 
     <div class="tiles" id="tiles"></div>
+
+    <div class="card hidden" id="rackCard">
+      <h2>Rack space <span class="count" id="rackCount"></span></h2>
+      <div class="rackbody" id="rackMap"></div>
+      <div class="rackfoot" id="rackFoot"></div>
+    </div>
 
     <div class="card" id="invCard">
       <h2>All inventory <span class="count" id="invCount"></span>
@@ -1036,6 +1076,68 @@
       if (!b) return;
       $('locFilter').value = b.dataset.z;
       renderZones(); renderLocations();
+    });
+
+    // The rack map: draw every slot the freezer HAS, full or empty.
+    //
+    // Everything else on this page is computed from the snapshot, and the
+    // snapshot is a list of pallets — so "40 locations" has always meant "40
+    // bins with something in them" and there was no way to ask how many bins
+    // there are. The server answers that from backend/slots.js; here it just
+    // gets drawn in rack order so it reads like walking the aisle.
+    function renderRack(sl) {
+      // Hidden rather than empty when the rack list doesn't describe what this
+      // instance is serving (a non-GT LOCATION_PREFIX): a confident "39 of 80"
+      // over the wrong warehouse is worse than no panel at all.
+      const on = !!(sl && sl.applies && sl.total);
+      $('rackCard').classList.toggle('hidden', !on);
+      if (!on) return;
+
+      $('rackCount').textContent =
+        `${fmtInt(sl.used)} of ${fmtInt(sl.total)} full · ${fmtInt(sl.free)} free`;
+
+      $('rackMap').innerHTML = (sl.zones || []).map((z) => `
+        <div class="rackzone">
+          <h3><b>${esc(z.zone)}</b> ${fmtInt(z.used)}/${fmtInt(z.total)} · ${fmtInt(z.free)} free</h3>
+          ${(z.rows || []).map((r) => `<div class="rackrow">
+            <span class="racklabel">${esc(r.row)}</span>
+            ${(r.cells || []).map((c) => {
+              const pos = c.code.slice(-2);
+              // Title carries the full code, so the number in the cell can stay
+              // just the position and the grid stays readable at this size.
+              return c.used
+                ? `<button class="rackcell on" data-code="${esc(c.code)}"
+                     title="${esc(c.code)} — ${fmtInt(c.pallets)} pallet${c.pallets === 1 ? '' : 's'} (open in All locations)">${esc(pos)}</button>`
+                : `<span class="rackcell" title="${esc(c.code)} — empty">${esc(pos)}</span>`;
+            }).join('')}
+          </div>`).join('')}
+        </div>`).join('');
+
+      const floor = (sl.floor || []).map((f) =>
+        `<span class="rackfloor">${esc(f.code)}: ${f.used ? `${fmtInt(f.pallets)} pallet${f.pallets === 1 ? '' : 's'}` : 'empty'}</span>`);
+      $('rackFoot').innerHTML = [
+        '<span class="rackkey on"><i></i>holds stock</span>',
+        '<span class="rackkey"><i></i>free</span>',
+        // The floor is a real place stock sits and not a rack slot, so it is
+        // reported beside the totals instead of inside them — otherwise
+        // "79 of 80" would mean different things on different days.
+        ...floor.map((f) => `<span>Floor · ${f}</span>`),
+        (sl.unknown || []).length
+          ? `<span class="rackodd">⚠ ${fmtInt(sl.unknown.length)} bin${sl.unknown.length === 1 ? '' : 's'} in use that the rack list doesn't know: ${esc(sl.unknown.join(', '))}</span>`
+          : '',
+      ].filter(Boolean).join('');
+    }
+    // A full bin opens in the location list below, which is where its contents
+    // already live — the map says where to look, it doesn't duplicate the table.
+    $('rackMap').addEventListener('click', (e) => {
+      const b = e.target.closest('button.rackcell');
+      if (!b) return;
+      $('locFilter').value = b.dataset.code;
+      const card = $('locCard');
+      card.classList.remove('folded');
+      card.querySelector('.caret').textContent = '▾';
+      renderZones(); renderLocations();
+      card.scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
 
     function renderLocations() {
@@ -1797,6 +1899,7 @@
       LOCS = o.locations || [];
       renderZones();
       renderLocations();
+      renderRack(o.slots);
     }
 
     $('logout').addEventListener('click', async () => {
