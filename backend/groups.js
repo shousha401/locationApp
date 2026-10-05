@@ -26,6 +26,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const history = require('./history');
 
 const FILE = path.join(__dirname, '..', 'data', 'product-groups.json');
 const MAX_NAME = 60;
@@ -366,6 +367,43 @@ function onHandNow(g, stock) {
   return claims(g).some((c) => stock.has(c));
 }
 
+// ── The permanent record (history.js) ────────────────────────────────────────
+// A closed job deletes itself a day later and takes its notes with it, so the
+// close is the last moment anyone can say what the job WAS. The record carries
+// the notes it still held, which is what makes "what shipped on the 5th"
+// answerable after the group is gone.
+const notesOf = (g) => ({ dates: { ...(g.dates || {}) }, plan: { ...(g.plan || {}) }, note: g.note || '' });
+const hasNotes = (n) => !!(n.note || Object.keys(n.dates).length || Object.keys(n.plan).length);
+
+// reason: 'shipped' (its stock left), 'stale' (never armed, nothing scheduled),
+// or 'manual' (someone pressed Close job now — the only one with a `who`).
+function logClosed(g, reason, who) {
+  const notes = notesOf(g);
+  history.add({ type: 'closed', at: g.closedAt, by: who || null, reason, ...history.snap(g),
+    ...(hasNotes(notes) ? { notes } : {}) });
+}
+
+// What changed between a group's notes before an edit and after it, one record
+// per note: the editor saves the whole group at once, and "kathleen updated
+// Pit Hams" says nothing about which instruction she actually wrote.
+function logNoteChanges(g, before, who) {
+  const ev = (type, more) => history.add({ type, by: who || null, ...history.snap(g), ...more });
+  const diff = (was, now, kind, key) => {
+    for (const k of new Set([...Object.keys(was), ...Object.keys(now)])) {
+      if (was[k] === now[k]) continue;
+      if (now[k]) ev('wrote', { kind, [key]: k, text: now[k], ...(was[k] ? { was: was[k] } : {}) });
+      else ev('removed', { kind, [key]: k, text: was[k] });
+    }
+  };
+  const after = notesOf(g);
+  diff(before.dates, after.dates, 'dated', 'date');
+  diff(before.plan, after.plan, 'weekly', 'day');
+  if (before.note !== after.note) {
+    if (after.note) ev('wrote', { kind: 'standing', text: after.note, ...(before.note ? { was: before.note } : {}) });
+    else ev('removed', { kind: 'standing', text: before.note });
+  }
+}
+
 function reconcile(stock) {
   // Aging out closed jobs rides the same clock tick: reconcile runs on every
   // read path, which is what keeps "7 days" meaning 7 days rather than
@@ -390,10 +428,12 @@ function reconcile(stock) {
       } else if (!onBatch && g.seenStock) {
         g.closedAt = new Date().toISOString();
         changed = true;
+        logClosed(g, 'shipped');
         console.log(`[Groups] batch '${g.name}' closed itself — its pallets have shipped`);
       } else if (!onBatch && isStale(g)) {
         g.closedAt = new Date().toISOString();
         changed = true;
+        logClosed(g, 'stale');
         console.log(`[Groups] batch '${g.name}' closed itself — nothing on hand, nothing scheduled, untouched for ${STALE_DAYS}+ days`);
       }
       continue;
@@ -441,10 +481,12 @@ function reconcile(stock) {
     } else if (!on && g.seenStock) {
       g.closedAt = new Date().toISOString();
       changed = true;
+      logClosed(g, 'shipped');
       console.log(`[Groups] job '${g.name}' closed itself — the snapshot shows no stock left of ${g.items.join('/')}`);
     } else if (!on && isStale(g)) {
       g.closedAt = new Date().toISOString();
       changed = true;
+      logClosed(g, 'stale');
       console.log(`[Groups] job '${g.name}' closed itself — nothing on hand, nothing scheduled, untouched for ${STALE_DAYS}+ days`);
     }
   }
@@ -497,6 +539,7 @@ function close(id, who) {
   g.updatedBy = who || null;
   g.updatedAt = g.closedAt;
   persist();
+  logClosed(g, 'manual', who);
   return g;
 }
 
@@ -516,6 +559,7 @@ function reopen(id, who) {
   g.updatedBy = who || null;
   g.updatedAt = new Date().toISOString();
   persist();
+  history.add({ type: 'reopened', by: who || null, ...history.snap(g) });
   return g;
 }
 
@@ -549,6 +593,9 @@ function create(fields, who) {
   if (standing) rec.note = standing; // absent rather than empty, so `g.note` alone answers "has one"
   if (f.family) rec.family = true;
   groups.push(rec);
+  // Before the prune, so a note written for a long-gone date is still on the
+  // record as having been written.
+  logNoteChanges(rec, { dates: {}, plan: {}, note: '' }, who);
   pruneDates();
   persist();
   return rec;
@@ -557,6 +604,8 @@ function create(fields, who) {
 function update(id, patch, who) {
   const g = get(id);
   if (!g) return { error: 'No such group' };
+  const before = notesOf(g);
+  const wasClosed = !!g.closedAt;
   if (patch.name !== undefined) {
     const name = cleanName(patch.name);
     if (!name) return { error: 'Group needs a name' };
@@ -605,6 +654,8 @@ function update(id, patch, who) {
   }
   g.updatedBy = who || null;
   g.updatedAt = new Date().toISOString();
+  logNoteChanges(g, before, who);
+  if (wasClosed && !g.closedAt) history.add({ type: 'reopened', by: who || null, ...history.snap(g) });
   pruneDates();
   persist();
   return g;
@@ -624,14 +675,20 @@ function clearDay(id, day, who) {
   g.updatedBy = who || null;
   g.updatedAt = new Date().toISOString();
   persist();
+  history.add({ type: 'removed', by: who || null, ...history.snap(g), kind: 'weekly', day, text: was });
   return { group: g, day, cleared: was };
 }
 
-function remove(id) {
+function remove(id, who) {
   const g = get(id);
   if (!g) return null;
   groups = groups.filter((x) => x.id !== g.id);
   persist();
+  // Deleting a group destroys its notes with it, so they go on the record here.
+  // It also marks where this id's history ends: ids are handed out again.
+  const notes = notesOf(g);
+  history.add({ type: 'deleted', by: who || null, ...history.snap(g),
+    ...(g.closedAt ? { wasClosed: true } : {}), ...(hasNotes(notes) ? { notes } : {}) });
   return g;
 }
 

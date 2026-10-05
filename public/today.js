@@ -389,6 +389,27 @@
       .sort((a, b) => String(a.g.name).localeCompare(String(b.g.name)));
   }
 
+  // What a CLOSED job contributed to today. A job that ships closes itself, and
+  // live() then drops it from every list above — which took its ✓ with it, so a
+  // morning where three jobs went out read "No tasks scheduled for today" by
+  // nine o'clock. Finished work is still today's work: it belongs in the done
+  // count, not nowhere. A ticked task comes back as ticked; an un-ticked dated
+  // one comes back too, because the job closing IS how it got done — the row
+  // says which. A standing note only counts if someone actually ticked it.
+  // Closed jobs delete themselves a day after closing (groups.js), so this can
+  // never grow into an archive; the permanent record is the admin History page.
+  function closedDone(dateStr) {
+    const dow = dayKeyOf(dateStr);
+    const out = [];
+    for (const g of GROUPS) {
+      if (!g.closedAt) continue;
+      if (g.plan && g.plan[dow]) out.push({ g, key: String(g.id), text: g.plan[dow], closed: true });
+      if (g.dates && g.dates[dateStr]) out.push({ g, key: 'd:' + g.id, text: g.dates[dateStr], closed: true });
+      if (g.note && DONE['n:' + g.id]) out.push({ g, key: 'n:' + g.id, text: g.note, closed: true });
+    }
+    return out.sort((a, b) => String(a.g.name).localeCompare(String(b.g.name)));
+  }
+
   // The month calendar's own state — separate from DONE/NOTES (which back the
   // always-visible, frequently-polled single-day view) so opening/navigating
   // the calendar never changes that view's fetch behavior. See saveDayNote()/
@@ -474,6 +495,8 @@
       // them there would say nothing about what makes those days different.
       const tasks = isToday ? tasksOnDate(date).concat(standingTasks()) : tasksOnDate(date);
       const open = tasks.filter((t) => !doneMap[t.key]);
+      // Same count the header's "N done" shows: ticked, plus jobs that shipped.
+      const finished = isToday ? tasks.length - open.length + closedDone(date).length : 0;
       const note = NOTES[date];
       const weekend = d.getDay() === 0 || d.getDay() === 6;
       if (!isToday) ahead += open.length;
@@ -484,7 +507,7 @@
         // here would just be the same words twice on one screen.
         body = `<div class="tb-wk-sum${open.length ? '' : ' tb-wk-clear'}">
           ${open.length ? `<b>${open.length} to do</b>listed above ↑`
-            : `<b>all clear</b>${tasks.length ? `${tasks.length} done` : 'nothing scheduled'}`}</div>`;
+            : `<b>all clear</b>${finished ? `${finished} done` : 'nothing scheduled'}`}</div>`;
       } else if (tasks.length || noteLines(note && note.text).length) {
         body = tasks.map((t) => `
           <div class="tb-wk-task${doneMap[t.key] ? ' tb-wk-off' : ''}">
@@ -537,7 +560,7 @@
     const all = tasksOnDate(date).concat(standingTasks());
     // Checked off means gone from the list — that is the whole point of the tick.
     const open = all.filter((t) => !DONE[t.key]);
-    const done = all.filter((t) => DONE[t.key]);
+    const done = all.filter((t) => DONE[t.key]).concat(closedDone(date));
     const late = overdueTasks();
     const note = NOTES[date];
     const mgr = isMgr();
@@ -666,7 +689,7 @@
         <div class="tb-next">
           <div class="tb-next-cap">▸ Up next</div>
           <div class="tb-next-row">${taskBody(next)}${btns(next)}${taskDetail(next)}</div>
-        </div>` : `<div class="tb-none">${done.length ? 'Everything for today is checked off. ✅'
+        </div>` : `<div class="tb-none">${done.length ? 'Everything for today is done. ✅'
           : 'No tasks scheduled for today.'}</div>`}
       ${rest.length ? `<div class="tb-cap2">Also today</div>
         <ul class="tb-list">${rest.map((t) => `<li>${taskBody(t)}${btns(t)}${taskDetail(t)}</li>`).join('')}</ul>` : ''}
@@ -677,8 +700,9 @@
         <ul class="tb-donelist ${SHOW_DONE ? '' : 'tb-hide'}">${done.map((t) => {
           const m = DONE[t.key] || {};
           return `<li><span class="tb-g">${esc(t.g.name)}</span>
-            <span class="tb-meta">${esc(t.text)}${m.by ? ` · done by ${esc(m.by)}` : ''}${m.at ? ` · ${esc(clock(m.at))}` : ''}</span>
-            <button class="tb-btn" data-undo="${esc(t.key)}">undo</button></li>`;
+            <span class="tb-meta">${esc(t.text)}${m.by ? ` · done by ${esc(m.by)}` : ''}${m.at ? ` · ${esc(clock(m.at))}` : ''}${
+              t.closed ? ` · job closed${t.g.closedBy ? ` by ${esc(t.g.closedBy)}` : ' — stock shipped'} ${esc(clock(t.g.closedAt))}` : ''}</span>
+            ${t.closed ? '' : `<button class="tb-btn" data-undo="${esc(t.key)}">undo</button>`}</li>`;
         }).join('')}</ul>` : ''}
       ${note && noteLines(note.text).length ? `
         <div class="tb-note"><span class="tb-cap">📌 Today's note</span>

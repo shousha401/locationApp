@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>History · Location Feed</title>
+  <style>
+    :root {
+      --bg:#0f172a; --panel:#1e293b; --panel2:#172033; --line:#334155;
+      --text:#e2e8f0; --muted:#94a3b8; --accent:#38bdf8; --accent2:#22d3ee;
+      --good:#34d399; --warn:#fbbf24; --err:#f87171;
+    }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--text);
+      font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+    a { color:var(--accent); text-decoration:none; }
+    header { display:flex; align-items:center; gap:16px; padding:12px 20px;
+      border-bottom:1px solid var(--line); flex-wrap:wrap; }
+    header h1 { margin:0; font-size:16px; white-space:nowrap; }
+    .grow { flex:1 1 auto; }
+    .who { font-size:12px; color:var(--muted); }
+    .badge { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px;
+      font-weight:700; text-transform:uppercase; letter-spacing:.05em; }
+    .badge.admin  { background:#3b2a0b; color:var(--warn); border:1px solid #5a4514; }
+    .badge.editor { background:#0e3b2e; color:var(--good); border:1px solid #14563f; }
+    .badge.viewer { background:#0b2a3b; color:var(--accent); border:1px solid #14415a; }
+    button.link { background:none; border:0; color:var(--muted); cursor:pointer;
+      font-size:12px; text-decoration:underline; }
+
+    .wrap { max-width:1000px; margin:0 auto; padding:22px 16px 60px; }
+    .intro { color:var(--muted); font-size:13px; margin:0 0 16px; }
+
+    .bar { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:18px; }
+    .seg { display:inline-flex; border:1px solid var(--line); border-radius:9px; overflow:hidden; }
+    .seg button { padding:8px 13px; border:0; border-right:1px solid var(--line); background:var(--panel2);
+      color:var(--muted); font:inherit; font-size:13px; cursor:pointer; white-space:nowrap; }
+    .seg button:last-child { border-right:0; }
+    .seg button.on { background:var(--accent); color:#04222f; font-weight:700; }
+    #q { flex:1 1 200px; min-width:0; padding:9px 11px; border-radius:9px; border:1px solid var(--line);
+      background:var(--panel2); color:var(--text); font:inherit; }
+    #q:focus { outline:none; border-color:var(--accent); }
+
+    .day { background:var(--panel); border:1px solid var(--line); border-radius:12px;
+      overflow:hidden; margin-bottom:16px; }
+    .day h2 { margin:0; padding:12px 16px; font-size:15px; border-bottom:1px solid var(--line);
+      display:flex; gap:12px; align-items:baseline; flex-wrap:wrap; }
+    .day h2 small { font-size:12px; font-weight:400; color:var(--muted); }
+
+    /* One event per row: when, who, what — then the job and the words under it. */
+    .ev { display:grid; grid-template-columns:76px 96px 1fr; gap:4px 12px; padding:10px 16px;
+      border-bottom:1px solid var(--line); align-items:baseline; }
+    .ev:last-child { border-bottom:0; }
+    .ev .t { color:var(--muted); font-size:12px; white-space:nowrap; }
+    .ev .by { font-weight:700; overflow-wrap:anywhere; }
+    .ev .by.auto { font-weight:400; color:var(--muted); font-style:italic; }
+    .ev .what { min-width:0; overflow-wrap:anywhere; }
+    .ev .g { font-weight:700; }
+    .ev .txt { color:var(--accent2); font-weight:600; }
+    .ev .sub { color:var(--muted); font-size:12px; margin-top:2px; }
+    .ev .sub b { color:var(--text); font-weight:600; }
+    .ev ul { margin:4px 0 0; padding-left:18px; color:var(--muted); font-size:13px; }
+    .ev ul .txt { font-weight:400; }
+    .ev.undone .what > .g, .ev.undone .what > .txt { text-decoration:line-through; opacity:.6; }
+
+    .tag { display:inline-block; padding:1px 8px; border-radius:999px; font-size:10px; font-weight:800;
+      text-transform:uppercase; letter-spacing:.07em; margin-right:8px; border:1px solid var(--line);
+      color:var(--muted); background:var(--panel2); white-space:nowrap; }
+    .tag.done   { color:var(--good); border-color:rgba(52,211,153,.4); background:rgba(52,211,153,.08); }
+    .tag.wrote  { color:var(--accent); border-color:rgba(56,189,248,.4); background:rgba(56,189,248,.08); }
+    .tag.closed { color:var(--warn); border-color:rgba(251,191,36,.4); background:rgba(251,191,36,.08); }
+    .tag.gone   { color:var(--err); border-color:rgba(248,113,113,.4); background:rgba(248,113,113,.08); }
+
+    .empty, .denied { padding:50px 20px; text-align:center; color:var(--muted); }
+    .foot { color:var(--muted); font-size:12px; margin-top:18px; }
+
+    @media (max-width:560px) {
+      .ev { grid-template-columns:auto 1fr; }
+      .ev .what { grid-column:1 / -1; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🕘 History</h1>
+    <a href="/">← Back to feed</a>
+    <div class="grow"></div>
+    <span class="who" id="who"></span>
+    <button class="link" id="logout">Sign out</button>
+  </header>
+
+  <div class="wrap" id="wrap">
+    <p class="intro">Every note written on a group, every task ticked off and every job that closed —
+      who did it and when. The board forgets after a few weeks; this does not.</p>
+
+    <div class="bar">
+      <div class="seg" id="range">
+        <button data-days="7">7 days</button>
+        <button data-days="30" class="on">30 days</button>
+        <button data-days="90">90 days</button>
+        <button data-days="0">All</button>
+      </div>
+      <div class="seg" id="kind">
+        <button data-kind="all" class="on">Everything</button>
+        <button data-kind="done">Done</button>
+        <button data-kind="notes">Notes</button>
+        <button data-kind="jobs">Jobs</button>
+      </div>
+      <input id="q" type="search" placeholder="Filter by group, person, note or item code" autocomplete="off">
+    </div>
+
+    <div id="list"><div class="empty">Loading…</div></div>
+    <div class="foot" id="foot"></div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) =>
+      ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+    const p2 = (n) => String(n).padStart(2, '0');
+    const ymd = (d) => `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
+    // A YYYY-MM-DD is a LOCAL day — never `new Date(str)`, which reads it as UTC
+    // and lands on the day before for anyone west of Greenwich (see today.js).
+    const fromYmd = (s) => { const [y, m, d] = String(s).split('-').map(Number); return new Date(y, m - 1, d); };
+    const shortDay = (s) => fromYmd(s).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+    const clock = (iso) => new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    const DAYNAME = { mon: 'Monday', tue: 'Tuesday', wed: 'Wednesday', thu: 'Thursday', fri: 'Friday', sat: 'Saturday', sun: 'Sunday' };
+
+    let EVENTS = [];
+    let DAYS = 30;
+    let KIND = 'all';
+    const KINDS = {
+      done: ['done', 'undone'],
+      notes: ['wrote', 'removed', 'daynote'],
+      jobs: ['closed', 'reopened', 'deleted'],
+    };
+
+    // When a note applies: its date, every weekday, or every day.
+    function when(e) {
+      if (e.kind === 'dated' && e.date) return `for ${shortDay(e.date)}`;
+      if (e.kind === 'weekly') return `every ${DAYNAME[e.day] || e.day}`;
+      if (e.kind === 'standing') return 'every day';
+      return '';
+    }
+    const items = (e) => (e.items && e.items.length
+      ? `<div class="sub">items ${esc(e.items.join(', '))}</div>` : '');
+    const group = (e) => (e.group ? `<span class="g">${esc(e.group)}</span>`
+      // A tick recovered from before this log existed, whose group was already deleted.
+      : `<span class="g" style="font-weight:400;color:var(--muted)">a group since deleted (#${esc(String(e.key || '').replace(/^[dn]:/, ''))})</span>`);
+    // The notes a job still held when it ended — the only place they survive.
+    function notesList(n) {
+      if (!n) return '';
+      const rows = Object.keys(n.dates || {}).sort().map((d) => `<li>${esc(shortDay(d))}: <span class="txt">${esc(n.dates[d])}</span></li>`)
+        .concat(Object.keys(n.plan || {}).map((d) => `<li>every ${esc(DAYNAME[d] || d)}: <span class="txt">${esc(n.plan[d])}</span></li>`))
+        .concat(n.note ? [`<li>every day: <span class="txt">${esc(n.note)}</span></li>`] : []);
+      return rows.length ? `<ul>${rows.join('')}</ul>` : '';
+    }
+    const WHY = { shipped: 'its stock shipped', stale: 'nothing on hand, nothing scheduled',
+      auto: 'closed on its own', manual: 'closed by hand' };
+
+    function describe(e, day) {
+      switch (e.type) {
+        case 'done': {
+          const sub = [
+            e.date && e.date !== day ? `scheduled <b>${esc(shortDay(e.date))}</b>` : '',
+            e.kind === 'standing' ? 'every-day job' : e.kind === 'weekly' ? 'weekly job' : '',
+            e.writtenBy ? `written by <b>${esc(e.writtenBy)}</b>` : '',
+            e.undoneBy ? `un-ticked by <b>${esc(e.undoneBy)}</b> at ${esc(clock(e.undoneAt))}` : '',
+          ].filter(Boolean).join(' · ');
+          return `<span class="tag done">✓ done</span>${group(e)}${e.text ? ` → <span class="txt">${esc(e.text)}</span>` : ''}
+            ${sub ? `<div class="sub">${sub}</div>` : ''}${items(e)}`;
+        }
+        case 'undone':
+          return `<span class="tag">un-ticked</span>${group(e)}${e.text ? ` → <span class="txt">${esc(e.text)}</span>` : ''}
+            ${e.date && e.date !== day ? `<div class="sub">scheduled <b>${esc(shortDay(e.date))}</b></div>` : ''}`;
+        case 'wrote':
+          return `<span class="tag wrote">${e.was ? 'changed note' : 'wrote note'}</span>${group(e)} → <span class="txt">${esc(e.text)}</span>
+            <div class="sub"><b>${esc(when(e))}</b>${e.was ? ` · was “${esc(e.was)}”` : ''}</div>${items(e)}`;
+        case 'removed':
+          return `<span class="tag gone">deleted note</span>${group(e)} → <span class="txt">${esc(e.text)}</span>
+            <div class="sub"><b>${esc(when(e))}</b></div>`;
+        case 'closed':
+          return `<span class="tag closed">job closed</span>${group(e)}
+            <div class="sub">${esc(WHY[e.reason] || 'closed')}</div>${notesList(e.notes)}${items(e)}`;
+        case 'reopened':
+          return `<span class="tag">reopened</span>${group(e)}`;
+        case 'deleted':
+          return `<span class="tag gone">group deleted</span>${group(e)}
+            ${e.wasClosed ? '<div class="sub">it was already closed</div>' : ''}${notesList(e.notes)}${items(e)}`;
+        case 'daynote':
+          return e.text
+            ? `<span class="tag wrote">day note</span><span class="g">${esc(shortDay(e.date))}</span>
+               <ul>${e.text.split('\n').map((l) => l.trim()).filter(Boolean)
+                 .map((l) => `<li><span class="txt">${esc(l)}</span></li>`).join('')}</ul>`
+            : `<span class="tag gone">cleared day note</span><span class="g">${esc(shortDay(e.date))}</span>`;
+        default:
+          return `<span class="tag">${esc(e.type)}</span>${group(e)}`;
+      }
+    }
+
+    // A ✓ that was later taken back is not work done. Pair every un-tick with
+    // the tick before it so the ✓ row is struck through and says who undid it —
+    // otherwise the day's "N done" would count a mis-tap.
+    function pairUndos(list) {
+      const last = new Map(); // "date|key" -> the latest standing ✓
+      for (const e of list) {
+        const k = `${e.date}|${e.key}`;
+        if (e.type === 'done') { delete e.undoneBy; delete e.undoneAt; last.set(k, e); }
+        else if (e.type === 'undone' && last.has(k)) {
+          const d = last.get(k);
+          d.undoneBy = e.by || 'someone';
+          d.undoneAt = e.at;
+          last.delete(k);
+        }
+      }
+    }
+
+    function render() {
+      const q = $('q').value.trim().toLowerCase();
+      const want = KINDS[KIND];
+      const shown = EVENTS.filter((e) => (!want || want.includes(e.type))
+        && (!q || [e.group, e.by, e.text, e.was, e.writtenBy, (e.items || []).join(' '),
+          JSON.stringify(e.notes || '')].join(' ').toLowerCase().includes(q)));
+
+      // By the day it HAPPENED, newest day first, and in order within the day.
+      const days = new Map();
+      for (const e of shown) {
+        const d = ymd(new Date(e.at));
+        if (!days.has(d)) days.set(d, []);
+        days.get(d).push(e);
+      }
+      const keys = [...days.keys()].sort().reverse();
+
+      $('list').innerHTML = keys.length ? keys.map((d) => {
+        const evs = days.get(d);
+        const n = (f) => evs.filter(f).length;
+        const sum = [
+          [n((e) => e.type === 'done' && !e.undoneBy), 'done'],
+          [n((e) => e.type === 'wrote' || (e.type === 'daynote' && e.text)), 'written'],
+          [n((e) => e.type === 'closed'), 'closed'],
+        ].filter(([c]) => c).map(([c, w]) => `${c} ${w}`).join(' · ');
+        return `<div class="day">
+          <h2>${esc(fromYmd(d).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }))}
+            <small>${esc(sum)}</small></h2>
+          ${evs.map((e) => `<div class="ev${e.undoneBy ? ' undone' : ''}">
+            <span class="t">${esc(clock(e.at))}</span>
+            <span class="by${e.by ? '' : ' auto'}">${esc(e.by || 'automatic')}</span>
+            <div class="what">${describe(e, d)}</div>
+          </div>`).join('')}
+        </div>`;
+      }).join('') : `<div class="empty">${EVENTS.length ? 'Nothing matches that filter.' : 'Nothing recorded in this window yet.'}</div>`;
+
+      $('foot').textContent = EVENTS.length
+        ? `${shown.length} of ${EVENTS.length} event${EVENTS.length === 1 ? '' : 's'} shown. `
+          + 'Entries from before the log was switched on were recovered from what the board still remembered, so some are missing their group name and note.'
+        : '';
+    }
+
+    async function load() {
+      let url = '/api/history';
+      if (DAYS) {
+        // Whole local days: "7 days" starts at midnight six days back, not at
+        // this minute a week ago — a window that cuts a day in half reads as
+        // work going missing.
+        const from = new Date();
+        from.setHours(0, 0, 0, 0);
+        from.setDate(from.getDate() - (DAYS - 1));
+        url += '?since=' + encodeURIComponent(from.toISOString());
+      }
+      const res = await fetch(url);
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `Could not load (${res.status})`);
+      EVENTS = (await res.json()).events || [];
+      pairUndos(EVENTS);
+      render();
+    }
+    const reload = () => load().catch((err) => {
+      $('list').innerHTML = `<div class="empty">${esc(err.message)}</div>`;
+    });
+
+    function segment(id, attr, apply) {
+      $(id).addEventListener('click', (e) => {
+        const b = e.target.closest('button');
+        if (!b) return;
+        for (const x of $(id).children) x.classList.toggle('on', x === b);
+        apply(b.dataset[attr]);
+      });
+    }
+    segment('range', 'days', (v) => { DAYS = Number(v); reload(); });
+    segment('kind', 'kind', (v) => { KIND = v; render(); });
+    $('q').addEventListener('input', render);
+
+    $('logout').addEventListener('click', async () => {
+      await fetch('/api/logout', { method: 'POST' });
+      location.href = '/login.html';
+    });
+
+    (async function init() {
+      let me;
+      try {
+        me = await (await fetch('/api/session')).json();
+      } catch (_) { location.href = '/login.html'; return; }
+      $('who').innerHTML = `${esc(me.username)} <span class="badge ${esc(me.role)}">${esc(me.role)}</span>`;
+      if (me.role !== 'admin') {
+        $('wrap').innerHTML = '<div class="denied">Only admins can read the history.<br><a href="/">← Back to the feed</a></div>';
+        return;
+      }
+      reload();
+    })();
+  </script>
+</body>
+</html>

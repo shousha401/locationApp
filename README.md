@@ -82,6 +82,8 @@ not per user — the cost lands on Swarmbox, which doesn't care which of us aske
   rather than a product family — see below. Details in **The Today board**.
 - `backend/today.js` — the Today board's own state (`data/today-board.json`): done
   ticks and the manager's note for the day, both keyed by calendar date.
+- `backend/history.js` — the permanent, append-only record of who wrote what and who
+  got it done (`data/history.jsonl`). See **History**.
 - `public/today.js` — the Today board itself, shared by the feed and the dashboard so
   the floor and the office read exactly the same thing.
 - `backend/users.js` + `backend/auth.js` — per-user login with `viewer`/`editor`/`admin` roles,
@@ -353,6 +355,31 @@ without that, a group given a new date every week accumulates a permanent list o
 finished jobs, and the editor shows every one of them as though it were still pending.
 Future dates are never pruned. The carry-over looks back seven days, inside the tick
 retention, so a task can never outlive the ✓ that would have cleared it.
+
+## History (admin only)
+
+Everything on the Today board ages out on purpose, and a closed job takes its name and
+its notes with it a day after it ships — so "what did we do last Tuesday" had no answer:
+a tick only ever stored a group id, and the group was already gone. **🕘 History**
+(`/history.html`, `GET /api/history`, both admin-only) is the record that doesn't forget.
+
+Every event is written to `data/history.jsonl` **as it happens**, one JSON object per
+line, carrying its own copy of the group's name, the note's text and the item codes —
+nothing in it refers to a group that has to still exist. It records a note **written**,
+changed or deleted on a group (dated, standing or weekly), a task **ticked** or
+un-ticked (with who wrote the note, when the log knows), a job **closed** (shipped,
+stale, or by hand — with the notes it still held), reopened or deleted, and the day's
+note. The file is append-only and never pruned.
+
+On its first boot the log is seeded from what the other files still remember — the
+ticks in `today-board.json` and any closed jobs still waiting out their day. Those
+entries are marked `backfilled`; a tick whose group was already deleted keeps who and
+when but not which job, and says so on the page rather than guessing (group ids are
+reused).
+
+The Today board's own **done** count includes jobs that closed today, for everyone: a
+job that ships closes itself and drops off the board, which used to take its ✓ with it
+and leave a busy morning reading "No tasks scheduled for today".
 
 ## Rack space — how many slots, and which are free
 

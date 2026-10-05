@@ -185,6 +185,7 @@
     <div class="grow"></div>
     <a class="navlink" href="/dashboard.html">📊 Dashboard</a>
     <a class="navlink" href="/requests.html">💬 Requests</a>
+    <a class="navlink hidden" id="historyLink" href="/history.html">🕘 History</a>
     <a class="navlink hidden" id="usersLink" href="/users.html">👥 Users</a>
     <span class="who" id="who"></span>
     <button class="link" id="logout">Sign out</button>
@@ -647,7 +648,10 @@
       try {
         ME = await (await fetch('/api/session')).json();
         $('who').innerHTML = `${esc(ME.username)} <span class="badge ${ME.role}">${esc(ME.role)}</span>`;
-        if (ME.role === 'admin') $('usersLink').classList.remove('hidden');
+        if (ME.role === 'admin') {
+          $('usersLink').classList.remove('hidden');
+          $('historyLink').classList.remove('hidden');
+        }
       } catch (_) { location.href = '/login.html'; return; }
 
       // Today's tasks + the day's note, shown up top so whoever signs in reads

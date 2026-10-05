@@ -12,6 +12,7 @@ const notes = require('./backend/notes');
 const requests = require('./backend/requests');
 const groups = require('./backend/groups');
 const today = require('./backend/today');
+const history = require('./backend/history');
 
 const app = express();
 app.use(express.json({ limit: '256kb' }));
@@ -222,7 +223,7 @@ app.delete('/api/groups/:id/plan/:day', auth.requireEditor, (req, res) => {
 });
 
 app.delete('/api/groups/:id', auth.requireEditor, (req, res) => {
-  const g = groups.remove(req.params.id);
+  const g = groups.remove(req.params.id, req.user.username);
   if (!g) return res.status(404).json({ error: 'No such group' });
   console.log(`[Groups] ${req.user.username} deleted '${g.name}'`);
   res.json({ ok: true, removed: g.name });
@@ -244,6 +245,26 @@ app.get('/api/today', (req, res) => {
   });
 });
 
+// A tick is stored as a bare key — the group id, prefixed `d:` for a dated note
+// and `n:` for the standing one (today.js on the page hands them out). Turn it
+// back into the task it stood for, while the group still exists to ask: the
+// history record has to carry the name and the words, because the group will
+// be deleted long before anyone reads it. Null when the key points at nothing.
+const DOW = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+function taskOf(key, date) {
+  const m = /^(?:([dn]):)?(\d+)$/.exec(String(key || ''));
+  const g = m && groups.get(m[2]);
+  if (!g) return null;
+  const [y, mo, d] = date.split('-').map(Number);
+  const day = DOW[new Date(y, mo - 1, d).getDay()];
+  const kind = m[1] === 'd' ? 'dated' : m[1] === 'n' ? 'standing' : 'weekly';
+  const text = kind === 'dated' ? (g.dates || {})[date]
+    : kind === 'standing' ? g.note : (g.plan || {})[day];
+  if (!text) return null;
+  return { g, kind, text, ...(kind === 'weekly' ? { day } : {}),
+    writtenBy: history.authorOf(g.id, kind, kind === 'dated' ? date : day) };
+}
+
 // Anyone signed in may tick a task off — the people doing the work on the floor
 // are viewers, and a board only they can read but not check off is a board
 // nobody keeps current.
@@ -251,9 +272,12 @@ app.post('/api/today/done', (req, res) => {
   const b = req.body || {};
   const r = today.setDone(b.date, b.groupId, !!b.done, req.user.username);
   if (r.error) return res.status(400).json({ error: r.error });
-  const g = groups.get(b.groupId);
+  const t = taskOf(r.groupId, r.date);
+  history.add({ type: r.done ? 'done' : 'undone', by: req.user.username, date: r.date, key: r.groupId,
+    ...(t ? { ...history.snap(t.g), kind: t.kind, text: t.text, ...(t.day ? { day: t.day } : {}),
+      ...(t.writtenBy ? { writtenBy: t.writtenBy } : {}) } : {}) });
   console.log(`[Today] ${req.user.username} ${r.done ? 'checked off' : 'un-checked'} `
-    + `'${g ? g.name : r.groupId}' for ${r.date}`);
+    + `'${t ? t.g.name : r.groupId}' for ${r.date}`);
   res.json(r);
 });
 
@@ -265,10 +289,44 @@ app.put('/api/today/note/:date', auth.requireEditor, (req, res) => {
   }
   const r = today.setNote(req.params.date, text, req.user.username);
   if (r.error) return res.status(400).json({ error: r.error });
+  history.add({ type: 'daynote', by: req.user.username, date: r.date, text: r.text });
   console.log(`[Today] ${req.user.username} ${r.text ? 'wrote' : 'cleared'} the note for ${r.date}`
     + `${r.text ? `: ${r.text.slice(0, 80)}` : ''}`);
   res.json(r);
 });
+
+// ── History (admin only) ─────────────────────────────────────────────────────
+// The permanent record of who wrote what and who got it done (history.js). The
+// board forgets on purpose; this is where an admin reads back what it forgot.
+// ?since= is an ISO instant — the page asks for its window in the viewer's own
+// days, the same way the board does.
+app.get('/api/history', auth.requireAdmin, (req, res) => {
+  res.json({ events: history.since(req.query.since) });
+});
+
+// The log's first boot: bring in what the other files still remember, so it
+// doesn't open empty. A tick only ever stored a group id, so it gets its name
+// and note back ONLY when that group is still on file with a note on that very
+// date — ids are reused, and guessing would put the wrong job on the record.
+// Closed jobs still waiting out their day in the Done fold come along too.
+const seeded = history.seedOnce(() => {
+  const out = [];
+  for (const [date, day] of Object.entries(today.doneRange('0000-01-01', '9999-12-31'))) {
+    for (const [key, mark] of Object.entries(day)) {
+      const t = taskOf(key, date);
+      out.push({ type: 'done', at: mark.at, by: mark.by, date, key,
+        ...(t ? { ...history.snap(t.g), kind: t.kind, text: t.text } : {}) });
+    }
+  }
+  for (const g of groups.list()) {
+    if (!g.closedAt) continue;
+    out.push({ type: 'closed', at: g.closedAt, by: g.closedBy || null,
+      reason: g.closedBy ? 'manual' : 'auto', ...history.snap(g),
+      notes: { dates: g.dates || {}, plan: g.plan || {}, note: g.note || '' } });
+  }
+  return out;
+});
+if (seeded) console.log(`[History] started the log with ${seeded} event(s) recovered from existing data`);
 
 // ── Build-requests channel ───────────────────────────────────────────────────
 // The app's feedback loop: any signed-in user (viewers included — that's Clay)
