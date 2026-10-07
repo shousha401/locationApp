@@ -392,6 +392,30 @@ The Today board's own **done** count includes jobs that closed today, for everyo
 job that ships closes itself and drops off the board, which used to take its ✓ with it
 and leave a busy morning reading "No tasks scheduled for today".
 
+## Other areas (admin only)
+
+The app is scoped to one location prefix (`LOCATION_PREFIX`, GT) and that is
+load-bearing: a job closes when its item code has no stock left in the snapshot, the
+rack map is GT's 80 bins, and the board counts GT's free slots. Widen the snapshot and
+a GT job never closes, because the same code is sitting in JF. So the rest of the
+warehouse does **not** join the snapshot — **🏭 Areas** (`/areas.html`, `/api/areas*`,
+admin-only) reads it into a separate store (`backend/areas.js`) that nothing on the
+board, the groups or the rack ever touches.
+
+Both reads happen only when an admin is looking; there is no timer, so an area nobody
+opens costs Swarmbox nothing:
+
+- **The list of areas** — one whole-warehouse read of two columns, kept in
+  `data/areas.json` and reused for a day. **⟳ Rescan areas** forces it, at most once
+  every 10 minutes for everyone together.
+- **One area** — its stock folded per bin and per product, held in RAM for 15 minutes
+  (four areas at most). **⟳ Refresh** re-reads it, no more often than every 30 seconds.
+
+An area is everything before a location's first dot (`GT.2.Z3.D04` → `GT`). Anything
+over `AREA_MAX_ROWS` (default 60,000) is listed but refused: UF is three location codes
+holding ~110k rows, a bulk location rather than racking. Read-only, like every other
+Swarmbox call here, and the cost column is never requested.
+
 ## Rack space — how many slots, and which are free
 
 Every other number in this app is computed from the Swarmbox snapshot, and the

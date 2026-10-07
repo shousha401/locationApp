@@ -185,6 +185,7 @@
     <div class="grow"></div>
     <a class="navlink" href="/dashboard.html">📊 Dashboard</a>
     <a class="navlink" href="/requests.html">💬 Requests</a>
+    <a class="navlink hidden" id="areasLink" href="/areas.html">🏭 Areas</a>
     <a class="navlink hidden" id="historyLink" href="/history.html">🕘 History</a>
     <a class="navlink hidden" id="usersLink" href="/users.html">👥 Users</a>
     <span class="who" id="who"></span>
@@ -651,6 +652,7 @@
         if (ME.role === 'admin') {
           $('usersLink').classList.remove('hidden');
           $('historyLink').classList.remove('hidden');
+          $('areasLink').classList.remove('hidden');
         }
       } catch (_) { location.href = '/login.html'; return; }
 

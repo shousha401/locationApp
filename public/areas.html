@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Other areas · Location Feed</title>
+  <style>
+    :root {
+      --bg:#0f172a; --panel:#1e293b; --panel2:#172033; --line:#334155;
+      --text:#e2e8f0; --muted:#94a3b8; --accent:#38bdf8; --accent2:#22d3ee;
+      --good:#34d399; --warn:#fbbf24; --err:#f87171;
+    }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--text);
+      font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+    a { color:var(--accent); text-decoration:none; }
+    header { display:flex; align-items:center; gap:16px; padding:12px 20px;
+      border-bottom:1px solid var(--line); flex-wrap:wrap; }
+    header h1 { margin:0; font-size:16px; white-space:nowrap; }
+    .grow { flex:1 1 auto; }
+    .who { font-size:12px; color:var(--muted); }
+    .badge { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px;
+      font-weight:700; text-transform:uppercase; letter-spacing:.05em; }
+    .badge.admin  { background:#3b2a0b; color:var(--warn); border:1px solid #5a4514; }
+    .badge.editor { background:#0e3b2e; color:var(--good); border:1px solid #14563f; }
+    .badge.viewer { background:#0b2a3b; color:var(--accent); border:1px solid #14415a; }
+    button.link { background:none; border:0; color:var(--muted); cursor:pointer;
+      font-size:12px; text-decoration:underline; }
+    button.small { padding:6px 13px; border:1px solid var(--line); border-radius:8px;
+      background:var(--panel2); color:var(--text); cursor:pointer; font:inherit; font-size:12px; white-space:nowrap; }
+    button.small:hover { border-color:var(--accent); }
+    button.small:disabled { opacity:.5; cursor:default; }
+
+    .wrap { max-width:1100px; margin:0 auto; padding:22px 16px 60px; }
+    .intro { color:var(--muted); font-size:13px; margin:0 0 6px; }
+    .meta { display:flex; gap:12px; align-items:center; flex-wrap:wrap; color:var(--muted);
+      font-size:12px; margin-bottom:16px; }
+    .mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+
+    /* The directory: one tile per area, biggest first. */
+    .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(128px,1fr)); gap:10px; margin-bottom:22px; }
+    .tile { text-align:left; padding:11px 13px; border-radius:11px; border:1px solid var(--line);
+      background:var(--panel); color:var(--text); cursor:pointer; font:inherit; min-width:0; }
+    .tile:hover { border-color:var(--accent); }
+    .tile.on { border-color:var(--accent); background:rgba(56,189,248,.1); }
+    .tile b { display:block; font-size:20px; font-weight:800; letter-spacing:.02em; }
+    .tile span { display:block; font-size:12px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .tile.blocked { cursor:default; opacity:.55; }
+    .tile.blocked:hover { border-color:var(--line); }
+
+    .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; overflow:hidden; }
+    .head { display:flex; gap:12px; align-items:center; flex-wrap:wrap; padding:13px 16px;
+      border-bottom:1px solid var(--line); }
+    .head h2 { margin:0; font-size:17px; }
+    .head small { color:var(--muted); font-size:12px; }
+    #q { flex:1 1 220px; min-width:0; padding:9px 11px; border-radius:9px; border:1px solid var(--line);
+      background:var(--panel2); color:var(--text); font:inherit; }
+    #q:focus { outline:none; border-color:var(--accent); }
+    .scroll { overflow-x:auto; }
+    table { width:100%; border-collapse:collapse; }
+    th, td { text-align:left; padding:9px 12px; border-bottom:1px solid var(--line); vertical-align:top; }
+    th { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); white-space:nowrap; }
+    td.num, th.num { text-align:right; white-space:nowrap; }
+    tr.bin { cursor:pointer; }
+    tr.bin:hover td { background:rgba(56,189,248,.05); }
+    tr.bin td:first-child { white-space:nowrap; font-weight:700; }
+    .caret { display:inline-block; width:14px; color:var(--muted); }
+    .desc { color:var(--muted); }
+    tr.item td { background:var(--panel2); font-size:13px; padding-top:7px; padding-bottom:7px; }
+    tr.item td:first-child { padding-left:38px; }
+    .chip { display:inline-block; padding:1px 8px; border-radius:999px; font-size:10px; font-weight:800;
+      text-transform:uppercase; letter-spacing:.06em; border:1px solid var(--line); color:var(--muted);
+      background:var(--bg); margin-right:4px; white-space:nowrap; }
+    .more { padding:12px 16px; text-align:center; }
+    .empty, .denied { padding:44px 20px; text-align:center; color:var(--muted); }
+    .err { color:var(--err); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🏭 Other areas</h1>
+    <a href="/">← Back to feed</a>
+    <div class="grow"></div>
+    <span class="who" id="who"></span>
+    <button class="link" id="logout">Sign out</button>
+  </header>
+
+  <div class="wrap" id="wrap">
+    <p class="intro">The rest of the warehouse, read straight from Swarmbox when you open an area. Read-only, and
+      separate from the feed and the dashboard: nothing here changes a task, a group or the rack map.</p>
+    <div class="meta"><span id="surveyed">Reading the list of areas from Swarmbox — about 10 seconds…</span>
+      <button class="small" id="rescan" disabled title="Re-read which areas exist and how big each one is">⟳ Rescan areas</button></div>
+
+    <div class="grid" id="grid"></div>
+    <div id="area"></div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) =>
+      ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+    const fmtInt = (n) => Math.round(n).toLocaleString();
+    const fmtQty = (n) => (Math.abs(n % 1) < 1e-9 ? Math.round(n).toLocaleString()
+      : n.toLocaleString(undefined, { maximumFractionDigits: 2 }));
+    const plural = (n, w) => `${fmtInt(n)} ${w}${n === 1 ? '' : 's'}`;
+    const clock = (iso) => new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    // Whole days since a YYYY-MM-DD, read as a LOCAL day (see today.js on why
+    // `new Date(str)` is the wrong tool for a date with no time on it).
+    function daysSince(s) {
+      const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(s || ''));
+      if (!m) return null;
+      const then = new Date(+m[1], +m[2] - 1, +m[3]);
+      const now = new Date();
+      now.setHours(0, 0, 0, 0);
+      return Math.round((now - then) / 86400000);
+    }
+    const dated = (s) => (s ? `${esc(String(s).slice(0, 10))}${daysSince(s) != null ? ` (${fmtInt(daysSince(s))}d)` : ''}` : '—');
+
+    const PAGE = 100;
+    let DIR = null;          // the directory of areas
+    let AREA = null;         // the area on screen
+    let WANT = '';           // the area last asked for — a slow answer to an older click is dropped
+    let SHOWN = PAGE;
+    const OPEN = new Set();  // bins expanded by hand
+
+    async function api(method, url) {
+      const res = await fetch(url, { method });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j.error || `Could not load (${res.status})`);
+      return j;
+    }
+
+    function drawDir() {
+      $('surveyed').innerHTML = `${esc(plural(DIR.areas.length, 'area'))} besides <b>${esc(DIR.home)}</b> · list read `
+        + `${esc(new Date(DIR.surveyedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }))}`
+        + (DIR.stale ? ` · <span class="err">could not re-read it just now</span>` : '');
+      $('rescan').disabled = false;
+      $('grid').innerHTML = DIR.areas.map((a) => `
+        <button class="tile${a.blocked ? ' blocked' : ''}${a.prefix === WANT ? ' on' : ''}"
+          ${a.blocked ? `disabled title="${esc(a.blocked)}"` : `data-area="${esc(a.prefix)}"`}>
+          <b>${esc(a.prefix)}</b>
+          <span>${esc(plural(a.bins, 'bin'))}</span>
+          <span>${a.blocked ? 'bulk — not opened' : esc(plural(a.pallets, 'pallet'))}</span>
+        </button>`).join('');
+    }
+
+    const qtyStr = (qty) => (qty && qty.length ? qty.map((x) => `${fmtQty(x.qty)} ${esc(x.uom)}`).join(' · ') : '—');
+
+    function drawArea() {
+      if (!AREA) return;
+      const q = $('q') ? $('q').value.trim().toLowerCase() : '';
+      // A bin matches on its own code, or on any product in it. Matched on a
+      // product, it opens itself and lists only what matched — "where in JF is
+      // 062065" should not need a click per bin to answer.
+      const rows = [];
+      for (const l of AREA.locations) {
+        if (!q) { rows.push({ l, items: l.items, forced: false }); continue; }
+        if (l.code.toLowerCase().includes(q)) { rows.push({ l, items: l.items, forced: false }); continue; }
+        const hit = l.items.filter((it) => `${it.item} ${it.description}`.toLowerCase().includes(q));
+        if (hit.length) rows.push({ l, items: hit, forced: true });
+      }
+      const body = rows.slice(0, SHOWN).map(({ l, items, forced }) => {
+        const open = forced || OPEN.has(l.code);
+        const sum = new Map();
+        for (const it of l.items) for (const x of it.qty) sum.set(x.uom, (sum.get(x.uom) || 0) + x.qty);
+        const codes = l.items.slice(0, 3).map((it) => it.item).join(' · ')
+          + (l.items.length > 3 ? ` +${l.items.length - 3}` : '');
+        return `<tr class="bin" data-bin="${esc(l.code)}">
+            <td class="mono"><span class="caret">${open ? '▾' : '▸'}</span>${esc(l.code)}</td>
+            <td class="num">${fmtInt(l.pallets)}</td>
+            <td><span class="mono">${esc(codes)}</span></td>
+            <td class="num">${qtyStr([...sum].map(([uom, qty]) => ({ uom, qty })))}</td>
+            <td></td><td></td>
+          </tr>` + (open ? items.map((it) => `<tr class="item">
+            <td class="mono">${esc(it.item)}</td>
+            <td class="num">${fmtInt(it.pallets)}</td>
+            <td class="desc">${esc(it.description)}</td>
+            <td class="num">${qtyStr(it.qty)}</td>
+            <td>${it.states.map((s) => `<span class="chip">${esc(s)}</span>`).join('')}${it.since ? `<span class="desc">since ${dated(it.since)}</span>` : ''}</td>
+            <td class="desc">${dated(it.received)}</td>
+          </tr>`).join('') : '');
+      }).join('');
+      const rest = rows.length - Math.min(rows.length, SHOWN);
+      $('rows').innerHTML = body || `<tr><td colspan="6" class="empty">${q ? 'Nothing in this area matches that.' : 'Nothing on hand in this area.'}</td></tr>`;
+      $('count').textContent = q ? `${plural(rows.length, 'bin')} match` : '';
+      $('more').innerHTML = rest ? `<button class="small" id="showmore">Show ${fmtInt(Math.min(rest, PAGE))} more of ${fmtInt(rest)}</button>` : '';
+    }
+
+    function frame() {
+      $('area').innerHTML = `<div class="card">
+        <div class="head">
+          <h2>${esc(AREA.prefix)}</h2>
+          <small>${esc(plural(AREA.locations.length, 'bin'))} · ${esc(plural(AREA.pallets, 'pallet'))} · as of ${esc(clock(AREA.builtAt))}</small>
+          <button class="small" id="fresh" title="Read this area from Swarmbox again">⟳ Refresh</button>
+          <input id="q" type="search" placeholder="Filter by bin, item code or description" autocomplete="off">
+          <small id="count"></small>
+        </div>
+        <div class="scroll"><table>
+          <thead><tr><th>Bin / item</th><th class="num">Pallets</th><th>Products</th><th class="num">Quantity</th><th>State</th><th>Received</th></tr></thead>
+          <tbody id="rows"></tbody>
+        </table></div>
+        <div class="more" id="more"></div>
+      </div>`;
+      drawArea();
+    }
+
+    async function openArea(prefix, fresh) {
+      WANT = prefix;
+      if (!fresh) { OPEN.clear(); SHOWN = PAGE; }
+      drawDir();
+      if (!fresh || !AREA) {
+        AREA = null;
+        $('area').innerHTML = `<div class="card"><div class="empty">Reading <b>${esc(prefix)}</b> from Swarmbox — a few seconds…</div></div>`;
+      }
+      try {
+        const a = await api('GET', `/api/areas/${encodeURIComponent(prefix)}${fresh ? '?fresh=1' : ''}`);
+        if (WANT !== prefix) return;
+        const q = $('q') ? $('q').value : '';
+        AREA = a;
+        frame();
+        if (q) { $('q').value = q; drawArea(); }
+      } catch (err) {
+        if (WANT !== prefix) return;
+        AREA = null;
+        $('area').innerHTML = `<div class="card"><div class="empty err">${esc(err.message)}</div></div>`;
+      }
+    }
+
+    $('grid').addEventListener('click', (e) => {
+      const t = e.target.closest('[data-area]');
+      if (t) openArea(t.dataset.area);
+    });
+    $('area').addEventListener('click', async (e) => {
+      const b = e.target.closest('button');
+      if (b && b.id === 'showmore') { SHOWN += PAGE; drawArea(); return; }
+      if (b && b.id === 'fresh') {
+        b.disabled = true;
+        b.textContent = '⟳ refreshing…';
+        await openArea(AREA.prefix, true);
+        return;
+      }
+      const row = e.target.closest('tr.bin');
+      if (!row) return;
+      const code = row.dataset.bin;
+      if (!OPEN.delete(code)) OPEN.add(code);
+      drawArea();
+    });
+    $('area').addEventListener('input', (e) => {
+      if (e.target.id === 'q') { SHOWN = PAGE; drawArea(); }
+    });
+
+    $('rescan').addEventListener('click', async () => {
+      const btn = $('rescan');
+      btn.disabled = true;
+      btn.textContent = '⟳ rescanning…';
+      let msg = '';
+      try { DIR = await api('POST', '/api/areas/rescan'); } catch (err) { msg = err.message; }
+      btn.textContent = '⟳ Rescan areas';
+      drawDir();
+      if (msg) $('surveyed').innerHTML += ` · <span class="err">${esc(msg)}</span>`;
+    });
+
+    $('logout').addEventListener('click', async () => {
+      await fetch('/api/logout', { method: 'POST' });
+      location.href = '/login.html';
+    });
+
+    (async function init() {
+      let me;
+      try {
+        me = await (await fetch('/api/session')).json();
+      } catch (_) { location.href = '/login.html'; return; }
+      $('who').innerHTML = `${esc(me.username)} <span class="badge ${esc(me.role)}">${esc(me.role)}</span>`;
+      if (me.role !== 'admin') {
+        $('wrap').innerHTML = '<div class="denied">Only admins can open other areas.<br><a href="/">← Back to the feed</a></div>';
+        return;
+      }
+      try {
+        DIR = await api('GET', '/api/areas');
+        drawDir();
+      } catch (err) {
+        $('surveyed').innerHTML = `<span class="err">${esc(err.message)}</span>`;
+      }
+    })();
+  </script>
+</body>
+</html>

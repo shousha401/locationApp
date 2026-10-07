@@ -13,6 +13,7 @@ const requests = require('./backend/requests');
 const groups = require('./backend/groups');
 const today = require('./backend/today');
 const history = require('./backend/history');
+const areas = require('./backend/areas');
 
 const app = express();
 app.use(express.json({ limit: '256kb' }));
@@ -344,6 +345,32 @@ const seeded = history.seedOnce(() => {
   return out;
 });
 if (seeded) console.log(`[History] started the log with ${seeded} event(s) recovered from existing data`);
+
+// ── Other areas (admin only) ─────────────────────────────────────────────────
+// The rest of the warehouse, read on demand and kept apart from the snapshot
+// everything else runs on (areas.js says why that separation matters). Each of
+// these can mean a read from Swarmbox, so who asked is logged like a manual
+// refresh is.
+const areaFail = (res, e) => res.status(502).json({ error: `Could not read Swarmbox: ${e.message}` });
+
+app.get('/api/areas', auth.requireAdmin, async (_req, res) => {
+  try { res.json(await areas.list()); } catch (e) { areaFail(res, e); }
+});
+app.post('/api/areas/rescan', auth.requireAdmin, async (req, res) => {
+  try {
+    const r = await areas.rescan();
+    if (r.error) return res.status(429).json(r);
+    console.log(`[Areas] rescan requested by ${req.user.username}`);
+    res.json(r);
+  } catch (e) { areaFail(res, e); }
+});
+app.get('/api/areas/:prefix', auth.requireAdmin, async (req, res) => {
+  try {
+    const r = await areas.get(req.params.prefix, req.query.fresh === '1');
+    if (r.error) return res.status(400).json(r);
+    res.json(r);
+  } catch (e) { areaFail(res, e); }
+});
 
 // ── Build-requests channel ───────────────────────────────────────────────────
 // The app's feedback loop: any signed-in user (viewers included — that's Clay)
