@@ -337,6 +337,14 @@ Hewitt" / "Send back GCB Lamb Material"), so every line is drawn as its own row 
 its own 📌, on the board, in the week strip and in the calendar alike. Run together as
 one block those are two jobs wearing one instruction, and the second one is the one
 that gets missed. Writing is unchanged — still one box, still one note.
+On today's board **each line is a job**: it counts toward `N to do today` and carries
+its own **✓ done**, open to everyone like any other tick. (The count used to know only
+about groups, so a day with a note and no group task read "0 to do · all clear" right
+above the instruction.) A line's tick is keyed by a hash of its words — a note has no
+ids — so editing a line un-ticks it. Note lines are not carried over to the next day.
+
+Anywhere a row shortens a list to "+N more" — the pallets under a task, the bins in a
+dashboard table — the "+N" is a button that opens the whole list and folds it back.
 **📅 Month** opens any date in any month — so Friday's note can be written on
 Monday, and any day's tasks can be ticked. Viewers get no editing affordance at all —
 the routes enforce it too (`403` without `editor`).

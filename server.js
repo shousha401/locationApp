@@ -250,6 +250,21 @@ app.get('/api/today', (req, res) => {
 // back into the task it stood for, while the group still exists to ask: the
 // history record has to carry the name and the words, because the group will
 // be deleted long before anyone reads it. Null when the key points at nothing.
+//
+// A line of the DAY'S NOTE ticks off too, under `t:` plus a hash of its words —
+// a note has no ids to key on. Same hash as the page (public/today.js), so the
+// line can be found again here and its words put on the record.
+const lineKey = (s) => {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0;
+  return 't:' + h.toString(36);
+};
+function noteLineOf(key, date) {
+  const n = today.noteFor(date);
+  const text = n && String(n.text).split('\n').map((s) => s.trim()).filter(Boolean)
+    .find((l) => lineKey(l) === key);
+  return text ? { kind: 'daynote', text, ...(n.by ? { writtenBy: n.by } : {}) } : null;
+}
 const DOW = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 function taskOf(key, date) {
   const m = /^(?:([dn]):)?(\d+)$/.exec(String(key || ''));
@@ -273,11 +288,13 @@ app.post('/api/today/done', (req, res) => {
   const r = today.setDone(b.date, b.groupId, !!b.done, req.user.username);
   if (r.error) return res.status(400).json({ error: r.error });
   const t = taskOf(r.groupId, r.date);
+  const line = t ? null : noteLineOf(r.groupId, r.date);
   history.add({ type: r.done ? 'done' : 'undone', by: req.user.username, date: r.date, key: r.groupId,
+    ...(line || {}),
     ...(t ? { ...history.snap(t.g), kind: t.kind, text: t.text, ...(t.day ? { day: t.day } : {}),
       ...(t.writtenBy ? { writtenBy: t.writtenBy } : {}) } : {}) });
   console.log(`[Today] ${req.user.username} ${r.done ? 'checked off' : 'un-checked'} `
-    + `'${t ? t.g.name : r.groupId}' for ${r.date}`);
+    + `'${t ? t.g.name : line ? line.text : r.groupId}' for ${r.date}`);
   res.json(r);
 });
 

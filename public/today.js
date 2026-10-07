@@ -55,6 +55,17 @@
   // is stored, and a manager still types one box.
   const noteLines = (text) => String(text == null ? '' : text)
     .split('\n').map((s) => s.trim()).filter(Boolean);
+  // Each line of the day's note is a job, so each one can be ticked off like a
+  // task. The tick needs a key, and a note has no ids — only its words — so the
+  // key is a hash of the line. Editing a line gives it a new key, which un-ticks
+  // it: changed instructions are not instructions somebody already carried out.
+  // `t:` keeps it clear of the group keys (bare id, `d:`, `n:`). The server
+  // works the same hash out to put the words on the history record (server.js).
+  const lineKey = (s) => {
+    let h = 5381;
+    for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0;
+    return 't:' + h.toString(36);
+  };
   // How many days past today the week strip looks. Six, not seven: a full week
   // ahead lands on today's own weekday again, so the weekly plan's tasks would
   // show twice — once big as today's, once dimmed as "next Wednesday's".
@@ -218,6 +229,14 @@
     .tb-noteline { display:flex; align-items:baseline; gap:9px; padding:5px 0; }
     .tb-noteline + .tb-noteline { border-top:1px dashed rgba(251,191,36,.3); }
     .tb-notepin { flex:0 0 auto; font-size:13px; opacity:.85; }
+    /* The ✓ sits at the far end of its line, where the task rows keep theirs. */
+    .tb-noteline .tb-notetext { flex:1 1 auto; min-width:0; }
+    .tb-noteline .tb-btn { flex:0 0 auto; align-self:center; }
+    .tb-notealldone { color:var(--muted); font-size:14px; }
+    /* "+N more" has to look like something you can press — as plain text it
+       read as a dead end. */
+    .tb-btn.tb-more { padding:2px 10px; font-size:12px; font-weight:700; color:var(--accent);
+      border-color:rgba(56,189,248,.45); }
     .tb-addnote { margin-top:16px; }
     .tb-hide { display:none; }
 
@@ -389,6 +408,22 @@
       .sort((a, b) => String(a.g.name).localeCompare(String(b.g.name)));
   }
 
+  // The lines of a day's note, as things to do. A manager writing "Hewitt THURS
+  // - Send to CMP" for today has given the floor a job, and the board used to
+  // answer "0 to do today · all clear" while printing it — the count only knew
+  // about groups. Two identical lines are one job, not two.
+  function noteTasks(dateStr) {
+    const n = NOTES[dateStr];
+    const seen = new Set();
+    return noteLines(n && n.text).map((text) => ({ key: lineKey(text), text }))
+      .filter((l) => !seen.has(l.key) && seen.add(l.key));
+  }
+
+  // Which "+N more" lists have been opened, by task and item. Kept here rather
+  // than in the DOM because the board redraws itself on every poll, and a list
+  // that folds shut while someone is reading it is worse than no list.
+  const MORE_OPEN = new Set();
+
   // What a CLOSED job contributed to today. A job that ships closes itself, and
   // live() then drops it from every list above — which took its ✓ with it, so a
   // morning where three jobs went out read "No tasks scheduled for today" by
@@ -495,8 +530,12 @@
       // them there would say nothing about what makes those days different.
       const tasks = isToday ? tasksOnDate(date).concat(standingTasks()) : tasksOnDate(date);
       const open = tasks.filter((t) => !doneMap[t.key]);
-      // Same count the header's "N done" shows: ticked, plus jobs that shipped.
-      const finished = isToday ? tasks.length - open.length + closedDone(date).length : 0;
+      // Today's cell mirrors the header, so the day note's lines count here too:
+      // still to do, and done — ticked, plus jobs that shipped.
+      const lines = isToday ? noteTasks(date) : [];
+      const linesOpen = lines.filter((l) => !doneMap[l.key]).length;
+      const finished = isToday
+        ? tasks.length - open.length + closedDone(date).length + lines.length - linesOpen : 0;
       const note = NOTES[date];
       const weekend = d.getDay() === 0 || d.getDay() === 6;
       if (!isToday) ahead += open.length;
@@ -506,7 +545,7 @@
         // Today's own work is already spelled out full-size above; repeating it
         // here would just be the same words twice on one screen.
         body = `<div class="tb-wk-sum${open.length ? '' : ' tb-wk-clear'}">
-          ${open.length ? `<b>${open.length} to do</b>listed above ↑`
+          ${open.length + linesOpen ? `<b>${open.length + linesOpen} to do</b>listed above ↑`
             : `<b>all clear</b>${finished ? `${finished} done` : 'nothing scheduled'}`}</div>`;
       } else if (tasks.length || noteLines(note && note.text).length) {
         body = tasks.map((t) => `
@@ -563,6 +602,11 @@
     const done = all.filter((t) => DONE[t.key]).concat(closedDone(date));
     const late = overdueTasks();
     const note = NOTES[date];
+    const lines = noteTasks(date);
+    const linesOpen = lines.filter((l) => !DONE[l.key]);
+    const linesDone = lines.filter((l) => DONE[l.key]);
+    const todo = open.length + linesOpen.length;
+    const doneN = done.length + linesDone.length;
     const mgr = isMgr();
 
     // Airport-board split: the first open task is the big UP NEXT row, the rest
@@ -626,17 +670,24 @@
     // against a bin in their head. Falls back to the bins alone when the API
     // hasn't been restarted yet and `palletIds` is missing: an older answer
     // should read as it used to, not blank.
-    function palletsWhere(s) {
+    //
+    // "+N more" is a BUTTON: it used to be plain text, which told someone
+    // standing at the rack that there were more pallets and gave them no way to
+    // find out which. Tapping it lists every one; "show less" folds it back.
+    function palletsWhere(s, id) {
+      const all = MORE_OPEN.has(id);
+      const more = (n) => (n > LOCS_SHOWN ? `<button class="tb-btn tb-more" data-more="${esc(id)}"
+        title="${all ? 'Show only the first few' : 'Show every pallet and where it is'}">${
+        all ? 'show less' : `+${n - LOCS_SHOWN} more`}</button>` : '');
       const ids = s.palletIds || [];
       if (!ids.length) {
         const locs = s.locations || [];
-        return `<span class="tb-where">${esc(locs.slice(0, LOCS_SHOWN).join('  ·  '))}${
-          locs.length > LOCS_SHOWN ? ` +${locs.length - LOCS_SHOWN} more` : ''}</span>`;
+        return `<span class="tb-where">${esc((all ? locs : locs.slice(0, LOCS_SHOWN)).join('  ·  '))}</span>`
+          + more(locs.length);
       }
-      return ids.slice(0, LOCS_SHOWN).map((p) => `<span class="tb-where">`
+      return (all ? ids : ids.slice(0, LOCS_SHOWN)).map((p) => `<span class="tb-where">`
         + `<b class="tb-plt">${esc(p.id)}</b>${p.at ? ` · ${esc(p.at)}` : ''}</span>`).join('')
-        + (ids.length > LOCS_SHOWN
-          ? `<span class="tb-where">+${ids.length - LOCS_SHOWN} more</span>` : '');
+        + more(ids.length);
     }
 
     function taskDetail(t) {
@@ -654,7 +705,7 @@
           ${s.description ? `<span class="tb-desc">${esc(s.description)}</span>` : ''}
           ${s.pallets
             ? `<span class="tb-amt">${esc(amount(s))}</span>
-               ${palletsWhere(s)}`
+               ${palletsWhere(s, `${t.date || ''}|${t.key}|${s.item}`)}`
             : '<span class="tb-none-amt">none on hand</span>'}
         </div>`).join('')}</div>`;
     }
@@ -666,9 +717,9 @@
           <div class="tb-date">${esc(now.toLocaleDateString(undefined, { month: 'long', day: 'numeric' }))}</div>
         </div>
         <div class="tb-counts">
-          <span class="tb-count${open.length ? ' tb-c-open' : ''}"><b>${open.length}</b> to do today</span>
+          <span class="tb-count${todo ? ' tb-c-open' : ''}"><b>${todo}</b> to do today</span>
           ${late.length ? `<span class="tb-count tb-c-late"><b>${late.length}</b> not done</span>` : ''}
-          ${done.length ? `<span class="tb-count tb-c-done"><b>${done.length}</b> done</span>` : ''}
+          ${doneN ? `<span class="tb-count tb-c-done"><b>${doneN}</b> done</span>` : ''}
           ${SLOTS ? `<span class="tb-count tb-c-slots${SLOTS.free <= SLOTS.total * 0.15 ? ' tb-tight' : ''}"
             title="${esc(SLOTS.used)} of ${esc(SLOTS.total)} rack slots hold stock">
             <b>${SLOTS.free}</b> ${SLOTS.free === 1 ? 'slot' : 'slots'} free
@@ -689,13 +740,13 @@
         <div class="tb-next">
           <div class="tb-next-cap">▸ Up next</div>
           <div class="tb-next-row">${taskBody(next)}${btns(next)}${taskDetail(next)}</div>
-        </div>` : `<div class="tb-none">${done.length ? 'Everything for today is done. ✅'
-          : 'No tasks scheduled for today.'}</div>`}
+        </div>` : (linesOpen.length ? '' : `<div class="tb-none">${doneN ? 'Everything for today is done. ✅'
+          : 'No tasks scheduled for today.'}</div>`)}
       ${rest.length ? `<div class="tb-cap2">Also today</div>
         <ul class="tb-list">${rest.map((t) => `<li>${taskBody(t)}${btns(t)}${taskDetail(t)}</li>`).join('')}</ul>` : ''}
-      ${done.length ? `
+      ${doneN ? `
         <div class="tb-donebar">
-          <button class="tb-link" id="tb-toggledone">${done.length} done today · ${SHOW_DONE ? 'hide' : 'show'}</button>
+          <button class="tb-link" id="tb-toggledone">${doneN} done today · ${SHOW_DONE ? 'hide' : 'show'}</button>
         </div>
         <ul class="tb-donelist ${SHOW_DONE ? '' : 'tb-hide'}">${done.map((t) => {
           const m = DONE[t.key] || {};
@@ -703,11 +754,18 @@
             <span class="tb-meta">${esc(t.text)}${m.by ? ` · done by ${esc(m.by)}` : ''}${m.at ? ` · ${esc(clock(m.at))}` : ''}${
               t.closed ? ` · job closed${t.g.closedBy ? ` by ${esc(t.g.closedBy)}` : ' — stock shipped'} ${esc(clock(t.g.closedAt))}` : ''}</span>
             ${t.closed ? '' : `<button class="tb-btn" data-undo="${esc(t.key)}">undo</button>`}</li>`;
+        }).join('')}${linesDone.map((l) => {
+          const m = DONE[l.key] || {};
+          return `<li><span class="tb-g">📌 ${esc(l.text)}</span>
+            <span class="tb-meta">today's note${m.by ? ` · done by ${esc(m.by)}` : ''}${m.at ? ` · ${esc(clock(m.at))}` : ''}</span>
+            <button class="tb-btn" data-undo="${esc(l.key)}">undo</button></li>`;
         }).join('')}</ul>` : ''}
       ${note && noteLines(note.text).length ? `
         <div class="tb-note"><span class="tb-cap">📌 Today's note</span>
-          ${noteLines(note.text).map((line) => `<div class="tb-noteline"><span class="tb-notepin">📌</span>
-            <span class="tb-notetext">${esc(line)}</span></div>`).join('')}
+          ${linesOpen.map((l) => `<div class="tb-noteline"><span class="tb-notepin">📌</span>
+            <span class="tb-notetext">${esc(l.text)}</span>
+            <button class="tb-btn tb-done" data-done="${esc(l.key)}" title="Check this off for today">✓ done</button></div>`).join('')}
+          ${linesOpen.length ? '' : '<div class="tb-noteline tb-notealldone">Every line of today’s note is done. ✅</div>'}
           <div class="tb-meta">${note.by ? `— ${esc(note.by)}` : ''}${note.at ? `, ${esc(clock(note.at))}` : ''}</div></div>`
         : (mgr ? `<div class="tb-addnote"><button class="tb-link" id="tb-addnote">＋ add a note for today</button></div>` : '')}
       ${weekStripHtml()}
@@ -1096,6 +1154,11 @@
             return;
           }
           if (b.dataset.undo) { setDone(b.dataset.undo, false); return; }
+          if (b.dataset.more) {
+            if (!MORE_OPEN.delete(b.dataset.more)) MORE_OPEN.add(b.dataset.more);
+            render();
+            return;
+          }
           if (b.dataset.clearnote) { clearNote(b.dataset.clearnote); return; }
           if (b.dataset.clearoneoff) { clearOneOff(b.dataset.clearoneoff, b.dataset.date); return; }
           if (b.dataset.clear) { clearDay(b.dataset.clear, b.dataset.date); }

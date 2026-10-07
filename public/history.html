@@ -143,7 +143,8 @@
     }
     const items = (e) => (e.items && e.items.length
       ? `<div class="sub">items ${esc(e.items.join(', '))}</div>` : '');
-    const group = (e) => (e.group ? `<span class="g">${esc(e.group)}</span>`
+    const group = (e) => (e.kind === 'daynote' ? '<span class="g">📌 Day note</span>'
+      : e.group ? `<span class="g">${esc(e.group)}</span>`
       // A tick recovered from before this log existed, whose group was already deleted.
       : `<span class="g" style="font-weight:400;color:var(--muted)">a group since deleted (#${esc(String(e.key || '').replace(/^[dn]:/, ''))})</span>`);
     // The notes a job still held when it ended — the only place they survive.

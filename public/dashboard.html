@@ -72,6 +72,9 @@
     .card.zoom { position:fixed; inset:0; z-index:40; margin:0; border-radius:0;
       display:flex; flex-direction:column; }
     .card.zoom .scroll.tall { flex:1 1 auto; max-height:none; min-height:0; }
+    .locmore { padding:0 7px; border-radius:999px; border:1px solid var(--line); background:var(--panel2);
+      color:var(--accent); font:inherit; font-size:11px; font-weight:700; cursor:pointer; }
+    .locmore:hover { border-color:var(--accent); }
     .more { padding:11px 16px; text-align:center; border-top:1px solid var(--line);
       font-size:12px; color:var(--muted); }
     .more button { padding:6px 16px; border-radius:8px; border:1px solid var(--line);
@@ -418,8 +421,28 @@
     const wStr = (w) => (w && w.length ? w.map((x) => `${fmtQty(x.qty)} ${esc(x.uom)}`).join(' · ') : '—');
     const asArr = (m) => [...m.entries()].map(([uom, qty]) => ({ uom, qty }));
     // Two bins fit the column; past that say how many more rather than wrapping.
-    const locSummary = (ls) => (ls.length <= 2 ? ls.join(' · ')
-      : `${ls.slice(0, 2).join(' · ')} +${fmtInt(ls.length - 2)}`);
+    // The "+N" is a BUTTON — as plain text it said there were more bins and gave
+    // no way to see which. Returns HTML (already escaped). What has been opened
+    // is remembered by its own list of bins, so it stays open across the page's
+    // periodic redraws instead of folding shut mid-read.
+    const BINS_OPEN = new Set();
+    function locSummary(ls) {
+      if (ls.length <= 2) return esc(ls.join(' · '));
+      const key = ls.join('|');
+      const all = BINS_OPEN.has(key);
+      return `${esc((all ? ls : ls.slice(0, 2)).join(' · '))} <button class="locmore" data-locmore="${esc(key)}"
+        title="${all ? 'Show only the first two' : 'Show every bin'}">${all ? 'less' : `+${fmtInt(ls.length - 2)}`}</button>`;
+    }
+    // Capture phase, and stopped there: most of these cells sit in rows that
+    // expand on click, and opening the bin list must not also toggle the row.
+    document.addEventListener('click', (e) => {
+      const b = e.target.closest && e.target.closest('[data-locmore]');
+      if (!b) return;
+      e.stopPropagation();
+      const key = b.dataset.locmore;
+      if (!BINS_OPEN.delete(key)) BINS_OPEN.add(key);
+      b.parentElement.innerHTML = locSummary(key.split('|'));
+    }, true);
     // The item codes a group is actually made of, spelled out under its name —
     // a count alone ("2 of 2 products") never says WHICH two.
     const GRP_CODES_SHOWN = 8;
@@ -1449,7 +1472,7 @@
         const rd = daysSince(p.date);
         return `
           <tr><td><span class="mono">${esc(p.item)}</span> <span class="desc">${esc(p.description)}</span></td>
-          <td class="mono">${esc(locSummary(p.locations)) || '—'}</td>
+          <td class="mono">${locSummary(p.locations) || '—'}</td>
           <td>${p.stateDate ? `<span class="${p.red ? 'since-late' : ''}">${esc(p.stateDate)}${sd != null ? ` (${fmtInt(sd)}d)` : ''}</span>` : '—'}</td>
           <td>${p.state ? `<span class="chip ${esc(p.state)}${p.red ? ' late' : ''}">${esc(p.state)}</span>` : '—'}${p.date ? `<div class="desc" style="font-size:10px">received ${esc(p.date)}${rd != null ? ` (${fmtInt(rd)}d)` : ''}</div>` : ''}</td>
           <td class="num">${wStr(p.cases)}</td>
@@ -1463,7 +1486,7 @@
           <tr class="click" data-mix="${esc(g.pallet)}">
             <td><span class="caret">${open ? '▾' : '▸'}</span><span class="mono">${esc(g.pallet)}</span></td>
             <td class="num">${fmtInt(g.items.length)}${g.red ? ` <span class="redcount">${fmtInt(g.red)}🔴</span>` : ''}</td>
-            <td class="mono">${esc(locSummary(g.locations)) || '—'}</td>
+            <td class="mono">${locSummary(g.locations) || '—'}</td>
             <td>${g.since ? `<span class="${g.red ? 'since-late' : ''}">${esc(g.since)}${sd != null ? ` (${fmtInt(sd)}d)` : ''}</span>` : '—'}</td>
             <td>${chips(g.states)}${g.date ? `<div class="desc" style="font-size:10px">received ${esc(g.date)}${rd != null ? ` (${fmtInt(rd)}d)` : ''}</div>` : ''}</td>
             <td class="num">${wStr(asArr(g.cases))}</td>
@@ -1669,7 +1692,7 @@
                 + `<button class="gedit gx" data-del="${g.id}" title="Remove the group '${esc(g.name)}' — the products themselves stay">✕</button>` : ''}
               <div class="desc" style="padding-left:11px">${codeList(g)}</div></td>
             <td class="num">${fmtInt(g.pallets.length)}${g.red ? ` <span class="redcount">${fmtInt(g.red)}🔴</span>` : ''}</td>
-            <td class="mono">${esc(locSummary(g.locations)) || '—'}</td>
+            <td class="mono">${locSummary(g.locations) || '—'}</td>
             <td>${g.since ? `<span class="${g.red ? 'since-late' : ''}">${esc(g.since)}${sd != null ? ` (${fmtInt(sd)}d)` : ''}</span>` : '—'}</td>
             <td>${chips(g.states)}${g.date ? `<div class="desc" style="font-size:10px">received ${esc(g.date)}${rd != null ? ` (${fmtInt(rd)}d)` : ''}</div>` : ''}</td>
             <td class="num">${wStr(asArr(g.cases))}</td>
@@ -1780,7 +1803,7 @@
             <td><span class="caret">${open ? '▾' : '▸'}</span><span class="mono">${esc(g.item)}</span>
               <div class="desc" style="padding-left:11px">${esc(g.description)}</div></td>
             <td class="num">${fmtInt(g.pallets.length)}${g.red ? ` <span class="redcount">${fmtInt(g.red)}🔴</span>` : ''}</td>
-            <td class="mono">${esc(locs) || '—'}</td>
+            <td class="mono">${locs || '—'}</td>
             <td>${g.since ? `<span class="${g.red ? 'since-late' : ''}">${esc(g.since)}${sd != null ? ` (${fmtInt(sd)}d)` : ''}</span>` : '—'}</td>
             <td>${chips(g.states)}${g.date ? `<div class="desc" style="font-size:10px">received ${esc(g.date)}${rd != null ? ` (${fmtInt(rd)}d)` : ''}</div>` : ''}</td>
             <td class="num">${wStr(asArr(g.cases))}</td>
