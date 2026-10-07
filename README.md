@@ -342,6 +342,9 @@ its own **✓ done**, open to everyone like any other tick. (The count used to k
 about groups, so a day with a note and no group task read "0 to do · all clear" right
 above the instruction.) A line's tick is keyed by a hash of its words — a note has no
 ids — so editing a line un-ticks it. Note lines are not carried over to the next day.
+Editors get a **＋ Add note** button on the board itself: one box, one job, appended to
+today's note as its own line (read fresh first, so it can't drop a line someone else
+just wrote). Changing or deleting existing lines is still the calendar's **✎ edit**.
 
 Anywhere a row shortens a list to "+N more" — the pallets under a task, the bins in a
 dashboard table — the "+N" is a button that opens the whole list and folds it back.

@@ -238,6 +238,20 @@
     .tb-btn.tb-more { padding:2px 10px; font-size:12px; font-weight:700; color:var(--accent);
       border-color:rgba(56,189,248,.45); }
     .tb-addnote { margin-top:16px; }
+    .tb-note .tb-addnote { margin-top:12px; }
+    /* A real button, not a text link: adding a note is the thing a manager
+       comes to this board to do. */
+    .tb-btn.tb-addbtn { padding:9px 18px; font-size:14px; font-weight:700; color:var(--warn);
+      border-color:rgba(251,191,36,.5); background:rgba(251,191,36,.08); }
+    .tb-btn.tb-addbtn:hover { color:var(--warn); border-color:var(--warn); background:rgba(251,191,36,.16); }
+    .tb-addform { display:flex; gap:9px; align-items:center; flex-wrap:wrap; }
+    .tb-addform input { flex:1 1 260px; min-width:0; padding:10px 12px; border-radius:9px; font:inherit; font-size:15px;
+      border:1px solid var(--line); background:var(--bg); color:var(--text); }
+    .tb-addform input:focus { outline:none; border-color:var(--warn); }
+    .tb-addform .tb-btn { padding:9px 18px; font-size:14px; }
+    .tb-btn.tb-addsave { font-weight:700; color:#04222f; background:var(--warn); border-color:var(--warn); }
+    .tb-btn.tb-addsave:hover { color:#04222f; border-color:var(--warn); filter:brightness(1.08); }
+    .tb-adderr { flex-basis:100%; color:var(--err); font-size:12px; }
     .tb-hide { display:none; }
 
     /* ── The week ahead ───────────────────────────────────────────────────────
@@ -366,6 +380,10 @@
   let SLOTS = null;           // rack capacity (/api/slots); null until it answers
   let SHOW_DONE = false;      // is the "N done today" list expanded
   let BUSY = false;           // a tick/clear is in flight — don't double-fire
+  // The "＋ Add note" box, while it is open: { text, err }. Held here, not in
+  // the DOM, because the board redraws itself on every poll and would otherwise
+  // wipe whatever a manager was halfway through typing.
+  let ADD = null;
   const isMgr = () => ME.role === 'editor' || ME.role === 'admin';
 
   // Every task on a given DATE — the weekly plan's note for that weekday plus
@@ -606,6 +624,20 @@
     const linesOpen = lines.filter((l) => !DONE[l.key]);
     const linesDone = lines.filter((l) => DONE[l.key]);
     const todo = open.length + linesOpen.length;
+    // Adding a note is ONE job typed into one box, appended to the day's note as
+    // its own line. It used to mean opening the calendar, finding today, pressing
+    // edit and adding a line by hand to whatever was already written there —
+    // four steps and a chance to wipe someone else's line. Editing or deleting
+    // existing lines still lives in the calendar's ✎ edit.
+    const addBox = !isMgr() ? '' : (ADD ? `
+      <form class="tb-addform" id="tb-addform">
+        <input id="tb-addtext" maxlength="200" autocomplete="off"
+          placeholder="New note for today — one job, e.g. Send back Hewitt" value="${esc(ADD.text)}">
+        <button type="submit" class="tb-btn tb-addsave">Add</button>
+        <button type="button" class="tb-btn" id="tb-addcancel">Cancel</button>
+        ${ADD.err ? `<span class="tb-adderr">${esc(ADD.err)}</span>` : ''}
+      </form>`
+      : '<button class="tb-btn tb-addbtn" id="tb-addnote">＋ Add note</button>');
     const doneN = done.length + linesDone.length;
     const mgr = isMgr();
 
@@ -766,11 +798,45 @@
             <span class="tb-notetext">${esc(l.text)}</span>
             <button class="tb-btn tb-done" data-done="${esc(l.key)}" title="Check this off for today">✓ done</button></div>`).join('')}
           ${linesOpen.length ? '' : '<div class="tb-noteline tb-notealldone">Every line of today’s note is done. ✅</div>'}
-          <div class="tb-meta">${note.by ? `— ${esc(note.by)}` : ''}${note.at ? `, ${esc(clock(note.at))}` : ''}</div></div>`
-        : (mgr ? `<div class="tb-addnote"><button class="tb-link" id="tb-addnote">＋ add a note for today</button></div>` : '')}
+          <div class="tb-meta">${note.by ? `— ${esc(note.by)}` : ''}${note.at ? `, ${esc(clock(note.at))}` : ''}</div>
+          ${addBox ? `<div class="tb-addnote">${addBox}</div>` : ''}</div>`
+        : (mgr ? `<div class="tb-addnote">${addBox}</div>` : '')}
       ${weekStripHtml()}
     </div>`;
     EL.classList.remove('hidden');
+    // The redraw just replaced the box someone may be typing in — put the
+    // cursor back where it was, at the end of what they had.
+    const box = ADD && EL.querySelector('#tb-addtext');
+    if (box) { box.focus(); box.setSelectionRange(box.value.length, box.value.length); }
+  }
+
+  // Append one line to today's note. Reads the note FRESH first rather than
+  // trusting what this screen last polled: the note is saved whole, so adding
+  // to a stale copy would silently drop a line somebody else wrote a minute ago.
+  async function addNoteLine() {
+    if (!ADD || BUSY) return;
+    const line = ADD.text.replace(/\s+/g, ' ').trim();
+    if (!line) { ADD = null; render(); return; }
+    BUSY = true;
+    try {
+      const date = ymd(new Date());
+      const cur = await (await fetch(`/api/today?date=${date}`)).json();
+      const was = (cur.notes && cur.notes[date] && cur.notes[date].text) || '';
+      const res = await fetch(`/api/today/note/${date}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: was ? `${was}\n${line}` : line }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) { ADD.err = j.error || 'Could not save.'; render(); return; }
+      ADD = null;
+      NOTES[date] = { text: j.text, by: j.by, at: j.at };
+      CAL.notes[date] = NOTES[date];
+      render();
+      if (calOpen()) renderCalendarBody();
+    } catch {
+      if (ADD) ADD.err = 'Could not save.';
+      render();
+    } finally { BUSY = false; }
   }
 
   // ── Actions ────────────────────────────────────────────────────────────────
@@ -1145,7 +1211,8 @@
         if (b) {
           if (b.id === 'tb-toggledone') { SHOW_DONE = !SHOW_DONE; render(); return; }
           if (b.id === 'tb-cal-open') { openCalendar(); return; }
-          if (b.id === 'tb-addnote') { openCalendar(); CAL.editing = true; renderCalendarBody(); return; }
+          if (b.id === 'tb-addnote') { ADD = { text: '', err: '' }; render(); return; }
+          if (b.id === 'tb-addcancel') { ADD = null; render(); return; }
           // data-date rides the week strip's and the carry-over rows' buttons;
           // today's own list omits it and means today.
           if (b.dataset.done) {
@@ -1168,6 +1235,18 @@
         // stays a real button rather than illegal nested interactive markup.
         const cell = e.target.closest('[data-wkday]');
         if (cell) openCalendar(cell.dataset.wkday);
+      });
+      // Enter in the box and the Add button both arrive here as a submit.
+      EL.addEventListener('submit', (e) => {
+        if (e.target.id !== 'tb-addform') return;
+        e.preventDefault();
+        addNoteLine();
+      });
+      EL.addEventListener('input', (e) => {
+        if (ADD && e.target.id === 'tb-addtext') ADD.text = e.target.value;
+      });
+      EL.addEventListener('keydown', (e) => {
+        if (ADD && e.key === 'Escape' && e.target.id === 'tb-addtext') { ADD = null; render(); }
       });
       await refresh(true);
     },
