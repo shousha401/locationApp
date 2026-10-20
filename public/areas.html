@@ -4,6 +4,14 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Other areas · Location Feed</title>
+  <!-- three.js for the experimental 3D view (areas3d.js). Only fetched when
+       someone opens 3D; the rest of the page never touches it. -->
+  <script type="importmap">
+    { "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+    } }
+  </script>
   <style>
     :root {
       --bg:#0f172a; --panel:#1e293b; --panel2:#172033; --line:#334155;
@@ -156,6 +164,11 @@
     .other span { color:var(--muted); font-size:12px; }
     .other.sel { border-color:#fff; }
     .other.dim { opacity:.3; }
+    .stage3d { margin:12px 16px 0; border:1px solid var(--line); border-radius:11px; overflow:hidden;
+      min-height:380px; background:#0f172a; }
+    .stage3d canvas { cursor:grab; }
+    .stage3d canvas:active { cursor:grabbing; }
+    .viewtabs .beta { font-size:10px; font-weight:700; opacity:.75; margin-left:4px; }
     .aisles, .face, .scroll { scrollbar-width:thin; scrollbar-color:#475569 transparent; }
     @media (max-width:560px) {
       .face { --row:36px; --col:36px; }
@@ -446,7 +459,8 @@
     }
 
     function walk(step) {
-      const keys = LAYOUT.aisles.map((a) => a.name).concat(LAYOUT.other.length ? [OTHER] : []);
+      // The 3D view draws racking only, so it walks cooler to cooler and skips "Floor & other".
+      const keys = LAYOUT.aisles.map((a) => a.name).concat(LAYOUT.other.length && VIEW !== '3d' ? [OTHER] : []);
       const i = keys.indexOf(AISLE) + step;
       if (i < 0 || i >= keys.length) return;
       AISLE = keys[i];
@@ -454,8 +468,88 @@
       drawArea();
     }
 
+    // ── 3D (experimental) ───────────────────────────────────────────────────────
+    // The same layout as the flat rack view, handed to areas3d.js to build as
+    // rows of racking. The scene is built once per area and snapshot, and then
+    // only recoloured (search, colour mode, a picked pallet) or walked (the
+    // cooler tabs), because rebuilding it on every keystroke would stutter.
+    let THREE3D = null;  // the module, once it has loaded
+    let FOCUSED = null;  // the cooler the camera last walked to
+    const drop3d = () => { if (THREE3D) THREE3D.dispose(); };
+
+    async function draw3d() {
+      const q = query();
+      const coolers = LAYOUT.aisles;
+      if (!coolers.length) { drop3d(); $('body').innerHTML = '<div class="empty">This area has no racking to draw in 3D — try List.</div>'; return; }
+      if (!coolers.some((a) => a.name === AISLE)) AISLE = coolers[0].name;
+      const hits = (a) => (q ? a.bins.filter((l) => matches(l, q)).length : 0);
+      if (q && !hits(coolers.find((a) => a.name === AISLE))) {
+        const h = coolers.find((a) => hits(a));
+        if (h) { AISLE = h.name; PICK = null; }
+      }
+      const total = coolers.reduce((n, a) => n + hits(a), 0);
+      $('count').textContent = q ? `${plural(total, 'bin')} match in the racking` : '';
+
+      const key = `${AREA.prefix}|${AREA.builtAt}`;
+      let stage = $('stage3d');
+      if (!stage || stage.dataset.key !== key) {
+        drop3d();
+        $('body').innerHTML = `<div id="strip3d"></div>
+          <div class="stage3d" id="stage3d" data-key="${esc(key)}"><div class="empty">Building the 3D view…</div></div>
+          <div class="hint" style="padding-top:10px">Drag to look around, scroll or pinch to zoom, right-drag to slide; W A S D walks.
+            Tap a pallet to see what is on it. Experimental — the coolers stand in code order, not where they are on the floor.</div>
+          <div id="info3d"></div>`;
+        stage = $('stage3d');
+        FOCUSED = null;
+        try {
+          THREE3D = THREE3D || await import('/areas3d.js');
+        } catch (e) {
+          stage.innerHTML = '<div class="empty err">The 3D view could not load. It fetches its 3D library from the internet (cdn.jsdelivr.net), and that did not answer from this computer.</div>';
+          return;
+        }
+        if (VIEW !== '3d' || $('stage3d') !== stage) return; // moved on while it loaded
+        stage.innerHTML = '';
+        try {
+          THREE3D.build(stage, { layout: LAYOUT, onPick: (code) => { PICK = PICK === code ? null : code; drawArea(); } });
+        } catch (e) {
+          stage.innerHTML = `<div class="empty err">This device could not draw 3D (${esc(e.message)}). The Racks view shows the same thing flat.</div>`;
+          return;
+        }
+        FOCUSED = coolers[0].name;
+      }
+
+      const i = coolers.findIndex((a) => a.name === AISLE);
+      const pallets = coolers.reduce((n, a) => n + a.bins.reduce((m, l) => m + l.pallets, 0), 0);
+      $('strip3d').innerHTML = `<div class="aisles">
+          <button class="walk" data-walk="-1" ${i <= 0 ? 'disabled' : ''} title="Previous cooler (←)" aria-label="Previous cooler">◀</button>
+          ${coolers.map((a) => `<button class="aisle${a.name === AISLE ? ' on' : ''}${q && !hits(a) ? ' nohit' : ''}" data-aisle="${esc(a.name)}">
+            Cooler ${esc(a.name)}${hits(a) ? `<span class="hit">${fmtInt(hits(a))}</span>` : ''}<small>${esc(plural(a.bins.length, 'bin'))}</small></button>`).join('')}
+          <button class="walk" data-walk="1" ${i >= coolers.length - 1 ? 'disabled' : ''} title="Next cooler (→)" aria-label="Next cooler">▶</button>
+        </div>
+        <div class="facehead"><small>${esc(plural(coolers.length, 'cooler'))} side by side, ${esc(plural(pallets, 'pallet'))} on the racks</small>
+          <div class="legend"><span class="modes">
+            <button data-mode="age" class="${MODE === 'age' ? 'on' : ''}">Colour by age</button>
+            <button data-mode="pallets" class="${MODE === 'pallets' ? 'on' : ''}">by pallets</button></span>${legend()}</div></div>`;
+      const on = document.querySelector('.aisle.on');
+      if (on) on.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      $('info3d').innerHTML = PICK ? spotInfo() : '';
+
+      if (!THREE3D || !THREE3D.active()) return; // still loading: the first call paints when it lands
+      THREE3D.paint({ colourOf, matches, q, pick: PICK });
+      // Searching walks to the first pallet that has it; otherwise to the start
+      // of the cooler picked in the strip.
+      const first = q ? (coolers.find((a) => a.name === AISLE).bins.find((l) => matches(l, q)) || null) : null;
+      const want = first ? `bin:${first.code}` : AISLE;
+      if (FOCUSED !== want) {
+        if (first) THREE3D.look(first.code); else THREE3D.focus(AISLE);
+        FOCUSED = want;
+      }
+    }
+
     function drawArea() {
       if (!AREA) return;
+      if (VIEW === '3d') { draw3d(); return; }
+      drop3d();
       if (VIEW === 'racks') { drawRacks(); return; }
       if (!$('rows')) {
         $('body').innerHTML = `<div class="scroll"><table>
@@ -496,6 +590,7 @@
     }
 
     function frame() {
+      drop3d();
       $('area').innerHTML = `<div class="card">
         <div class="head">
           <h2>${esc(AREA.prefix)}</h2>
@@ -504,6 +599,7 @@
           <button class="small" id="fresh" title="Read this area from Swarmbox again">⟳ Refresh</button>
           <span class="viewtabs">
             <button data-view="racks" class="${VIEW === 'racks' ? 'on' : ''}">Racks</button>
+            <button data-view="3d" class="${VIEW === '3d' ? 'on' : ''}" title="Experimental: the area as racking you can walk through">3D<span class="beta">try</span></button>
             <button data-view="list" class="${VIEW === 'list' ? 'on' : ''}">List</button></span>
           <input id="q" type="search" placeholder="Find a bin, item code or description" autocomplete="off">
           <small id="count"></small>
@@ -519,6 +615,7 @@
       drawDir();
       if (!fresh || !AREA) {
         AREA = null;
+        drop3d();
         $('area').innerHTML = `<div class="card"><div class="empty">Reading <b>${esc(prefix)}</b> from Swarmbox — a few seconds…</div></div>`;
       }
       try {
@@ -550,7 +647,8 @@
       if (b && b.id === 'showmore') { SHOWN += PAGE; drawArea(); return; }
       if (b && b.dataset.view) {
         VIEW = b.dataset.view;
-        remember('areas.view', VIEW);
+        // 3D is a try-out: it is not what the page opens in next time.
+        if (VIEW !== '3d') remember('areas.view', VIEW);
         DRAWN = null;
         frame();
         return;
@@ -583,7 +681,7 @@
     });
     // ← and → walk from aisle to aisle, except while typing in the search box.
     document.addEventListener('keydown', (e) => {
-      if (!AREA || VIEW !== 'racks' || e.altKey || e.ctrlKey || e.metaKey) return;
+      if (!AREA || VIEW === 'list' || e.altKey || e.ctrlKey || e.metaKey) return;
       if (e.target.closest && e.target.closest('input, textarea, select')) return;
       if (e.key === 'ArrowLeft') { walk(-1); e.preventDefault(); }
       if (e.key === 'ArrowRight') { walk(1); e.preventDefault(); }
