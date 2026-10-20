@@ -630,5 +630,18 @@ function slotCapacity() {
   return { ok: snap.ok, builtAt: snap.builtAt, ...slots.capacity(rows, PREFIX) };
 }
 
-module.exports = { start, refresh, status, searchLocations, getLocation, overview,
+// The snapshot's rows, in the shape Swarmbox sends them — for areas.js, which
+// draws GT's rack from what is already in memory rather than reading it again.
+function homeRows() {
+  const rows = [];
+  for (const [location, list] of snap.byLocation) {
+    for (const r of list) {
+      rows.push({ location, item: r.item, description: snap.itemDesc.get(r.item) || '', pallet: r.pallet,
+        base_quantity: r.baseQty, base_uom: r.baseUom, state: r.state, date: r.date, state_date: r.stateDate });
+    }
+  }
+  return { ok: snap.ok, builtAt: snap.builtAt, rows };
+}
+
+module.exports = { start, refresh, status, searchLocations, getLocation, overview, homeRows,
   itemsOnHand, itemStock, stockFor, slotCapacity };

@@ -23,6 +23,8 @@
 const fs = require('fs');
 const path = require('path');
 const { getRows, withRetry } = require('./swarmbox');
+const inventory = require('./inventory');
+const slots = require('./slots');
 
 const FILE = path.join(__dirname, '..', 'data', 'areas.json');
 const SURVEY_TTL_MS = 24 * 60 * 60 * 1000;
@@ -37,7 +39,8 @@ const KEEP_AREAS = 4;
 // — and opening it would be a 30MB download to show three lines. Listed, so
 // nobody wonders where it went, and refused.
 const MAX_ROWS = Number(process.env.AREA_MAX_ROWS) || 60000;
-// The app's own area is not "another area": it has the feed and the dashboard.
+// The app's own area. It is never read from Swarmbox here — the snapshot every
+// other page runs on already holds it — so its rack view costs nothing.
 const HOME = String(process.env.LOCATION_PREFIX || 'GT').trim().toUpperCase();
 
 // Same columns the snapshot takes, minus the ones this view never shows — and,
@@ -99,12 +102,27 @@ function surveyOnce() {
   return surveying;
 }
 
-const describe = (s) => ({
-  surveyedAt: s.at,
-  home: HOME,
-  areas: s.areas.filter((a) => a.prefix !== HOME).map((a) => ({ ...a,
-    ...(a.rows > MAX_ROWS ? { blocked: 'A bulk location, not racking — too large to open here.' } : {}) })),
-});
+// The home area's tile, counted from the snapshot as it stands now rather than
+// from the day-old survey. Null until the first snapshot lands.
+function homeTile() {
+  const h = inventory.homeRows();
+  if (!h.ok) return null;
+  const bins = new Set();
+  const pallets = new Set();
+  for (const r of h.rows) { bins.add(r.location); if (r.pallet) pallets.add(r.pallet); }
+  return { prefix: HOME, bins: bins.size, pallets: pallets.size, rows: h.rows.length, home: true,
+    ...(slots.applies(HOME) ? { slots: slots.ALL.length } : {}) };
+}
+
+const describe = (s) => {
+  const home = homeTile();
+  return {
+    surveyedAt: s.at,
+    home: HOME,
+    areas: (home ? [home] : []).concat(s.areas.filter((a) => a.prefix !== HOME).map((a) => ({ ...a,
+      ...(a.rows > MAX_ROWS ? { blocked: 'A bulk location, not racking — too large to open here.' } : {}) }))),
+  };
+};
 
 // The directory. Reads Swarmbox only when there is no survey yet or the one on
 // file is more than a day old; a failed re-read falls back to the old list,
@@ -193,7 +211,16 @@ async function load(prefix) {
 async function get(prefix, fresh) {
   prefix = up(prefix);
   if (!PREFIX_OK.test(prefix)) return { error: 'Not an area' };
-  if (prefix === HOME) return { error: `${HOME} is the app's own area — use the feed and the dashboard` };
+  if (prefix === HOME) {
+    // Folded fresh from the snapshot on every ask: it is a couple of thousand
+    // rows already in memory, and it can never be older than the board.
+    const h = inventory.homeRows();
+    if (!h.ok) return { error: 'The inventory is still loading — try again in a minute' };
+    return { ...fold(HOME, h.rows), builtAt: new Date(h.builtAt).toISOString(), home: true,
+      // GT's racking is known slot by slot (slots.js), so its empty spots are
+      // real free slots, not a guess from the shape of the bay.
+      ...(slots.applies(HOME) ? { slots: slots.ALL } : {}) };
+  }
   // Only areas the survey knows: the prefix goes into a Swarmbox query, and the
   // size check below needs a row count to check against.
   const known = (await list()).areas.find((a) => a.prefix === prefix);

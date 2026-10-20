@@ -129,6 +129,11 @@
     .bay-no { text-align:center; font-size:12px; color:var(--muted); padding-top:7px; white-space:nowrap; }
     .slot { position:relative; display:flex; align-items:flex-end; padding:5px 2px 0; border-bottom:4px solid #2563eb; }
     .slot.vacant::after { content:''; position:absolute; inset:9px 6px 4px; border:1px dashed rgba(148,163,184,.2); border-radius:3px; }
+    /* A slot KNOWN to exist and known to be empty (GT, from slots.js): a place a
+       pallet can go, so it is drawn as an invitation rather than a shrug. */
+    .slot.vacant.free::after { border:1px dashed rgba(52,211,153,.6); background:rgba(52,211,153,.06); }
+    .tile.home { border-color:rgba(34,211,238,.55); }
+    .tile.home b::after { content:' your area'; font-size:11px; font-weight:600; color:var(--accent2); letter-spacing:0; }
     .load { width:100%; height:100%; border:0; padding:0 0 5px; border-radius:3px 3px 1px 1px; cursor:pointer;
       background:var(--c); color:#0b1220; font:inherit; font-size:12px; font-weight:800;
       box-shadow:inset 0 -5px 0 rgba(120,72,24,.6); }
@@ -213,15 +218,15 @@
     }
 
     function drawDir() {
-      $('surveyed').innerHTML = `${esc(plural(DIR.areas.length, 'area'))} besides <b>${esc(DIR.home)}</b> · list read `
+      $('surveyed').innerHTML = `${esc(plural(DIR.areas.filter((a) => !a.home).length, 'area'))} besides <b>${esc(DIR.home)}</b> · list read `
         + `${esc(new Date(DIR.surveyedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }))}`
         + (DIR.stale ? ` · <span class="err">could not re-read it just now</span>` : '');
       $('rescan').disabled = false;
       $('grid').innerHTML = DIR.areas.map((a) => `
-        <button class="tile${a.blocked ? ' blocked' : ''}${a.prefix === WANT ? ' on' : ''}"
+        <button class="tile${a.blocked ? ' blocked' : ''}${a.home ? ' home' : ''}${a.prefix === WANT ? ' on' : ''}"
           ${a.blocked ? `disabled title="${esc(a.blocked)}"` : `data-area="${esc(a.prefix)}"`}>
           <b>${esc(a.prefix)}</b>
-          <span>${esc(plural(a.bins, 'bin'))}</span>
+          <span>${a.slots ? `${fmtInt(a.slots)} slots` : esc(plural(a.bins, 'bin'))}</span>
           <span>${a.blocked ? 'bulk — not opened' : esc(plural(a.pallets, 'pallet'))}</span>
         </button>`).join('');
     }
@@ -260,25 +265,37 @@
       const lv = /^([A-Z])(\d{1,3})$/.exec(s[3]);
       if (!lv) return null;
       const lettered = /^([A-Z])(\d{1,3})$/.exec(s[2]);
-      if (lettered) return { aisle: `${s[1]}-${lettered[1]}`, bay: lettered[2], level: lv[1], spot: Number(lv[2]) };
-      if (/^\d{1,3}$/.test(s[2])) return { aisle: s[1], bay: s[2], level: lv[1], spot: Number(lv[2]) };
+      // The bay keeps the code's own spelling as its label (Z4 in GT, C03 in JF,
+      // 03 in F), so the drawing names it the way the floor and the label do.
+      if (lettered) return { aisle: `${s[1]}-${lettered[1]}`, bay: lettered[2], label: s[2], level: lv[1], spot: Number(lv[2]) };
+      if (/^\d{1,3}$/.test(s[2])) return { aisle: s[1], bay: s[2], label: s[2], level: lv[1], spot: Number(lv[2]) };
       return null;
     }
 
     function buildLayout(area) {
       const aisles = new Map();
       const other = [];
-      for (const l of area.locations) {
-        const p = parseBin(l.code);
-        if (!p) { other.push(l); continue; }
+      const place = (p) => {
         let a = aisles.get(p.aisle);
         if (!a) { a = { name: p.aisle, bays: new Map(), top: 'A', bins: [] }; aisles.set(p.aisle, a); }
         let b = a.bays.get(p.bay);
-        if (!b) { b = { name: p.bay, lo: p.spot, hi: p.spot, at: new Map() }; a.bays.set(p.bay, b); }
+        if (!b) { b = { name: p.bay, label: p.label, lo: p.spot, hi: p.spot, at: new Map(), slots: new Set() }; a.bays.set(p.bay, b); }
         b.lo = Math.min(b.lo, p.spot);
         b.hi = Math.max(b.hi, p.spot);
-        b.at.set(`${p.level}${p.spot}`, l);
         if (p.level > a.top) a.top = p.level;
+        return { a, b, key: `${p.level}${p.spot}` };
+      };
+      // Every slot the area is KNOWN to have, stocked or not — so a zone with
+      // nothing in it is still drawn, and its spots read as free.
+      for (const code of area.slots || []) {
+        const p = parseBin(code);
+        if (p) { const { b, key } = place(p); b.slots.add(key); }
+      }
+      for (const l of area.locations) {
+        const p = parseBin(l.code);
+        if (!p) { other.push(l); continue; }
+        const { a, b, key } = place(p);
+        b.at.set(key, l);
         a.bins.push(l);
       }
       const nat = (x, y) => x.localeCompare(y, undefined, { numeric: true });
@@ -338,7 +355,7 @@
       const p = parseBin(l.code);
       return `<div class="spotinfo" id="spotinfo">
         <h4><span class="mono">${esc(l.code)}</span>
-          <small>${p ? `aisle ${esc(p.aisle)}, bay ${esc(p.bay)}, level ${esc(p.level)}, spot ${esc(String(p.spot))} — ` : ''}${esc(plural(l.pallets, 'pallet'))}</small>
+          <small>${p ? `cooler ${esc(p.aisle)}, bay ${esc(p.label)}, level ${esc(p.level)}, spot ${esc(String(p.spot))} — ` : ''}${esc(plural(l.pallets, 'pallet'))}</small>
           <span class="grow"></span><button class="small" data-unpick="1">Close</button></h4>
         <div class="scroll"><table>
           <thead><tr><th>Item</th><th class="num">Pallets</th><th>Description</th><th class="num">Quantity</th><th>State</th><th>Received</th></tr></thead>
@@ -349,7 +366,7 @@
 
     function drawRacks() {
       const q = query();
-      const tabs = LAYOUT.aisles.map((a) => ({ key: a.name, label: `Aisle ${a.name}`,
+      const tabs = LAYOUT.aisles.map((a) => ({ key: a.name, label: `Cooler ${a.name}`,
         sub: plural(a.bins.length, 'bin'), hits: q ? a.bins.filter((l) => matches(l, q)).length : 0 }));
       if (LAYOUT.other.length) {
         tabs.push({ key: OTHER, label: 'Floor & other', sub: plural(LAYOUT.other.length, 'spot'),
@@ -367,10 +384,10 @@
       const i = tabs.findIndex((t) => t.key === AISLE);
 
       const strip = `<div class="aisles">
-        <button class="walk" data-walk="-1" ${i <= 0 ? 'disabled' : ''} title="Previous aisle (←)" aria-label="Previous aisle">◀</button>
+        <button class="walk" data-walk="-1" ${i <= 0 ? 'disabled' : ''} title="Previous cooler (←)" aria-label="Previous cooler">◀</button>
         ${tabs.map((t) => `<button class="aisle${t.key === AISLE ? ' on' : ''}${q && !t.hits ? ' nohit' : ''}" data-aisle="${esc(t.key)}">
           ${esc(t.label)}${t.hits ? `<span class="hit">${fmtInt(t.hits)}</span>` : ''}<small>${esc(t.sub)}</small></button>`).join('')}
-        <button class="walk" data-walk="1" ${i >= tabs.length - 1 ? 'disabled' : ''} title="Next aisle (→)" aria-label="Next aisle">▶</button>
+        <button class="walk" data-walk="1" ${i >= tabs.length - 1 ? 'disabled' : ''} title="Next cooler (→)" aria-label="Next cooler">▶</button>
       </div>`;
 
       const old = document.querySelector('.face');
@@ -399,18 +416,24 @@
                 ? `<div class="slot"><button class="load${PICK === l.code ? ' sel' : ''}${q && matches(l, q) ? ' match' : ''}"
                     style="--c:${colourOf(l)}" data-bin="${esc(l.code)}" title="${esc(binTitle(l))}"
                     aria-label="${esc(binTitle(l))}">${l.pallets ? fmtInt(l.pallets) : '•'}</button></div>`
-                : `<div class="slot vacant" title="${esc(`${L}${String(s).padStart(2, '0')} — nothing recorded`)}"></div>`);
+                : b.slots.has(`${L}${s}`)
+                  ? `<div class="slot vacant free" title="${esc(`${b.label}.${L}${String(s).padStart(2, '0')} — empty slot`)}"></div>`
+                  : `<div class="slot vacant" title="${esc(`${L}${String(s).padStart(2, '0')} — nothing recorded`)}"></div>`);
             }
           }
           return `<div class="bay"><div class="bay-grid" style="grid-template-columns:repeat(${b.hi - start + 1},var(--col))">${cells.join('')}</div>
-            <div class="bay-no">Bay ${esc(b.name)}</div></div>`;
+            <div class="bay-no">${AREA.slots ? 'Zone' : 'Bay'} ${esc(b.label)}</div></div>`;
         }).join('');
-        view = `<div class="facehead"><h3>Aisle ${esc(a.name)}</h3>
-            <small>${esc(plural(a.bayList.length, 'bay'))}, levels A–${esc(a.top)}, ${esc(plural(a.bins.length, 'bin'))} with ${esc(plural(pallets, 'pallet'))}</small>
+        const known = a.bayList.reduce((n, b) => n + b.slots.size, 0);
+        const free = a.bayList.reduce((n, b) => n + [...b.slots].filter((k) => !b.at.has(k)).length, 0);
+        view = `<div class="facehead"><h3>Cooler ${esc(a.name)}</h3>
+            <small>${esc(plural(a.bayList.length, AREA.slots ? 'zone' : 'bay'))}, levels A–${esc(a.top)}, ${esc(plural(a.bins.length, 'bin'))} with ${esc(plural(pallets, 'pallet'))}${
+              known ? `, ${esc(plural(free, 'free slot'))} of ${fmtInt(known)}` : ''}</small>
             <div class="legend"><span class="modes">
               <button data-mode="age" class="${MODE === 'age' ? 'on' : ''}">Colour by age</button>
               <button data-mode="pallets" class="${MODE === 'pallets' ? 'on' : ''}">by pallets</button></span>${legend()}
-              <span><i style="background:none;box-shadow:none;border:1px dashed rgba(148,163,184,.5)"></i>nothing recorded</span></div></div>
+              ${known ? '<span><i style="background:rgba(52,211,153,.08);box-shadow:none;border:1px dashed rgba(52,211,153,.7)"></i>empty slot</span>'
+                : '<span><i style="background:none;box-shadow:none;border:1px dashed rgba(148,163,184,.5)"></i>nothing recorded</span>'}</div></div>
           <div class="face${q ? ' searching' : ''}${walked ? ' walked' : ''}">
             <div class="rack"><div class="lvls" style="padding-top:0">${levels.map((L) => `<span>${L}</span>`).join('')}</div>${bays}</div>
           </div>`;
@@ -476,7 +499,8 @@
       $('area').innerHTML = `<div class="card">
         <div class="head">
           <h2>${esc(AREA.prefix)}</h2>
-          <small>${esc(plural(AREA.locations.length, 'bin'))} · ${esc(plural(AREA.pallets, 'pallet'))} · as of ${esc(clock(AREA.builtAt))}</small>
+          <small>${esc(plural(AREA.locations.length, 'bin'))} · ${esc(plural(AREA.pallets, 'pallet'))} · as of ${esc(clock(AREA.builtAt))}${
+            AREA.home ? ' (the same snapshot as the board)' : ''}</small>
           <button class="small" id="fresh" title="Read this area from Swarmbox again">⟳ Refresh</button>
           <span class="viewtabs">
             <button data-view="racks" class="${VIEW === 'racks' ? 'on' : ''}">Racks</button>

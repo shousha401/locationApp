@@ -411,16 +411,21 @@ opens costs Swarmbox nothing:
 - **One area** — its stock folded per bin and per product, held in RAM for 15 minutes
   (four areas at most). **⟳ Refresh** re-reads it, no more often than every 30 seconds.
 
-An opened area shows as **Racks** by default (or **List**): one aisle at a time, drawn
+An opened area shows as **Racks** by default (or **List**): one cooler at a time, drawn
 as you'd see it standing in it — uprights between bays, a beam under every level, each
-pallet a block coloured by age (or by pallet count). ◀ ▶ or the arrow keys walk aisle
-to aisle; a search lights up the pallets holding a product and jumps to the first aisle
+pallet a block coloured by age (or by pallet count). ◀ ▶ or the arrow keys walk cooler
+to cooler; a search lights up the pallets holding a product and jumps to the first cooler
 that has one; tapping a pallet lists what is on it. Swarmbox has no floor plan, so the
-racking is read from the bin code: `F.A.03.E01` is aisle A, bay 03, level E (A is the
-floor), spot 01; a lettered middle part names the aisle with it (`JF.1.C03.G06` → aisle
+racking is read from the bin code: `F.A.03.E01` is cooler A, bay 03, level E (A is the
+floor), spot 01; a lettered middle part names the cooler with it (`JF.1.C03.G06` → cooler
 1-C, bay 03). Empty spots are inferred from the shape of the bay, since Swarmbox only
 returns bins with stock, and codes that aren't rack positions (floors, docks, desks) are
 listed under **Floor & other**.
+
+GT has a tile there too, marked as the app's own area. Its rack view is folded from the
+snapshot the board already runs on, so it never reads Swarmbox, and because GT's
+racking is known slot by slot (`slots.js`), its empty spots are drawn as real **empty
+slots** rather than inferred ones. Bays take the code's own name, so GT's read Z1–Z5.
 
 An area is everything before a location's first dot (`GT.2.Z3.D04` → `GT`). Anything
 over `AREA_MAX_ROWS` (default 60,000) is listed but refused: UF is three location codes
