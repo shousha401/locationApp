@@ -61,7 +61,10 @@ the **Today board** (below), so signing in starts with what has to happen today:
   starts off, as it never appears on those sheets. **🙈 Blind count** prints the sheet
   without the system quantity (or over/short), so the counter writes what is on the
   rack rather than the number they expect; the Excel download keeps it, as the copy
-  to check their count against. Read-only like Areas, from its own
+  to check their count against. The **✕** beside a line leaves it off the printout and
+  the download (a bin counted already, a product someone else is doing); it stays on
+  screen crossed out, to put back, and the paper says how many lines were left off.
+  Read-only like Areas, from its own
   store (`backend/counts.js`): one read per area, kept 15 minutes, and the bulk areas
   Areas refuses are refused here too. Nothing records the counts yet.
 

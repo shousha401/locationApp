@@ -88,11 +88,24 @@
       background:rgba(251,191,36,.06); }
     .sheet.blind td.w { min-width:90px; }
     .sheet.blind td.w.note { min-width:220px; }
+    /* Lines left off by hand stay on screen, crossed out, so one tapped by
+       mistake is a tap to put back; they are not printed or downloaded. */
+    .sheet td.x, .sheet th.x { width:1%; padding:3px 0 3px 8px; }
+    .sheet td.x button { min-width:30px; height:28px; padding:0 8px; border:1px solid var(--line); border-radius:7px;
+      background:none; color:var(--muted); font:inherit; font-size:13px; cursor:pointer; white-space:nowrap; }
+    .sheet td.x button:hover { border-color:var(--err); color:var(--err); }
+    .sheet td.x button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+    .sheet tr.off td:not(.x) { opacity:.35; text-decoration:line-through; }
+    .sheet tr.off td.x button { border-color:var(--accent); color:var(--accent); }
+    .trim { display:flex; gap:10px; align-items:center; flex-wrap:wrap; padding:9px 16px; border-bottom:1px solid var(--line);
+      font-size:12px; color:var(--muted); }
+    .trim b { color:var(--text); }
 
     @media print {
       @page { size:landscape; margin:10mm; }
       body { background:#fff; color:#000; font-size:10.5px; }
-      header, .intro, .step, .grid, .head, .blindnote, .levels, .foot, #msg { display:none !important; }
+      header, .intro, .step, .grid, .head, .blindnote, .levels, .trim, .foot, #msg { display:none !important; }
+      .sheet .x, .sheet tr.off { display:none !important; }
       .wrap { max-width:none; padding:0; }
       .card { border:0; border-radius:0; background:#fff; }
       .scroll { overflow:visible; }
@@ -164,6 +177,9 @@
     // than tick off the number they expect. It stays on from row to row — it is
     // how this round of counting is run, not a property of one row.
     let BLIND = false;
+    // Lines taken off this row's sheet by hand — a bin counted already, a
+    // product someone else is doing — by lineKey. Cleared with the next row.
+    let OFF = new Set();
     let WANT = '';     // what was last asked for — a slow answer to an older click is dropped
 
     // ?area=JC&row=1-F&levels=CDEF&blind=1, so a sheet can be bookmarked or sent to someone.
@@ -194,10 +210,14 @@
       const run = v.every((x, i) => !i || x.charCodeAt(0) === v[i - 1].charCodeAt(0) + 1);
       return v.length > 2 && run ? `${v[0]}–${v[v.length - 1]}` : v.join(', ');
     };
-    function shown(s) {
+    // The row's lines on the picked levels, including any left off by hand…
+    function onLevels(s) {
       const { picked } = levelsFor(s);
       return s.lines.filter((l) => { const v = levelOf(l.location); return !v || picked.has(v); });
     }
+    // …and the lines that go on paper and into the download.
+    const lineKey = (l) => `${l.location}|${l.item}|${l.pallet}`;
+    const shown = (s) => onLevels(s).filter((l) => !OFF.has(lineKey(l)));
 
     function drawAreas(dir, on) {
       $('areas').innerHTML = dir.areas.map((a) => `
@@ -263,27 +283,42 @@
       const s = SHEET;
       const day = new Date().toLocaleDateString([], { month: '2-digit', day: '2-digit', year: 'numeric' });
       const { present, picked } = levelsFor(s);
+      const all = onLevels(s);
       const list = shown(s);
+      const off = all.length - list.length;
       const bins = new Set(list.map((l) => l.location)).size;
       const pallets = new Set(list.map((l) => l.pallet).filter(Boolean)).size;
       const size = `${plural(list.length, 'line')} · ${plural(bins, 'bin')} · ${plural(pallets, 'pallet')}`;
       const lvls = present.length ? ` · levels ${span(picked)}` : '';
+      // Said on the paper too, so a short sheet isn't taken for the whole row.
+      const trimmed = off ? ` · ${plural(off, 'line')} left off by hand` : '';
       // A blind sheet keeps what the counter needs to find the stock and has
-      // nothing that gives the answer away.
-      const cols = BLIND ? 6 : 9;
+      // nothing that gives the answer away. The first column is the ✕, on
+      // screen only, where a phone can reach it without scrolling sideways.
+      const cols = (BLIND ? 6 : 9) + 1;
       const tail = BLIND ? '<td class="w"></td><td class="w note"></td>' : null;
+      // Bin breaks follow the printed lines, so the paper reads right without
+      // the crossed-out ones; a crossed-out line breaks from the line above it.
       let prev = '';
-      const lines = list.map((l) => {
-        const cls = l.location === prev ? 'same' : (prev ? 'newbin' : '');
-        prev = l.location;
+      let prevAll = '';
+      const lines = all.map((l) => {
+        const k = lineKey(l);
+        const isOff = OFF.has(k);
+        const after = isOff ? prevAll : prev;
+        const cls = (l.location === after ? 'same' : (after ? 'newbin' : '')) + (isOff ? ' off' : '');
+        prevAll = l.location;
+        if (!isOff) prev = l.location;
         return `<tr class="${cls}">
+          <td class="x"><button data-off="${esc(k)}" aria-pressed="${isOff}"
+            title="${isOff ? 'Put this line back on the sheet' : 'Leave this line off the printout and the download'}"
+            aria-label="${isOff ? 'Put back' : 'Leave off'} ${esc(l.location)} ${esc(l.item)} ${esc(l.pallet)}">${isOff ? '↩' : '✕'}</button></td>
           <td class="loc mono">${esc(l.location)}</td><td class="mono">${esc(l.item)}</td>
           <td class="desc">${esc(l.description)}</td><td class="pal mono">${esc(l.pallet || '—')}</td>
           ${tail || `<td class="w"></td><td class="num">${esc(qtyStr(l.qty))}</td>
           <td class="w"></td><td class="w"></td><td class="w note"></td>`}</tr>`;
       }).join('');
       const found = Array.from({ length: FOUND_LINES }, () =>
-        `<tr class="found"><td></td><td></td><td></td><td></td>${tail
+        `<tr class="found"><td class="x"></td><td></td><td></td><td></td><td></td>${tail
           || '<td class="w"></td><td></td><td class="w"></td><td class="w"></td><td class="w note"></td>'}</tr>`).join('');
       $('sheet').innerHTML = `<div class="card">
         <div class="head">
@@ -301,17 +336,21 @@
         ${present.length ? `<div class="levels">Levels on this sheet
           ${present.map((v) => `<button class="${picked.has(v) ? 'on' : ''}" data-lv="${esc(v)}" aria-pressed="${picked.has(v)}">${esc(v)}</button>`).join('')}
           <span>— A is the pick level and starts off, as on the Excel sheets.</span></div>` : ''}
+        ${all.length ? `<div class="trim">${off
+          ? `<span><b>${esc(plural(off, 'line'))} left off</b> this sheet — crossed out below, not printed or downloaded.</span>
+            <button class="small" id="puton">↩ Put them all back</button>`
+          : '<span>Not counting a line? Tap the ✕ beside it to leave it off the printout and the download.</span>'}</div>` : ''}
         <div class="paperhead">
           <h2>${BLIND ? 'BLIND ' : ''}CYCLE COUNT WORK SHEET</h2>
           <span>ZONE: <b>${esc(s.label)}</b> <span class="mono">(${esc(codeOf(s))})</span></span>
           <span>NAME: <span class="fill"></span></span>
           <span>DATE: <b>${esc(day)}</b></span>
-          <small>${esc(size + lvls)} · ${BLIND
+          <small>${esc(size + lvls + trimmed)} · ${BLIND
             ? `list read from Swarmbox at ${esc(clock(s.builtAt))} — count every pallet; write anything not listed at the end`
             : `system quantities read from Swarmbox at ${esc(clock(s.builtAt))} — stock that moved after that will not match`}</small>
         </div>
         <div class="scroll"><table class="sheet${BLIND ? ' blind' : ''}">
-          <thead><tr><th>Location</th><th>Item</th><th>Description</th><th>Pallet ID</th>
+          <thead><tr><th class="x"></th><th>Location</th><th>Item</th><th>Description</th><th>Pallet ID</th>
             <th>Phy. qty</th>${BLIND ? '' : '<th class="num">Sys. qty</th><th>Over</th><th>Short</th>'}<th>Reason / notes</th></tr></thead>
           <tbody>${lines || `<tr><td colspan="${cols}" class="empty">Nothing in this row right now.</td></tr>`}
             <tr class="foundhead"><td colspan="${cols}">Found in the row but not on this sheet</td></tr>${found}</tbody>
@@ -353,11 +392,20 @@
     }
 
     document.addEventListener('click', (e) => {
-      const t = e.target.closest('[data-area],[data-row],[data-lv],#blind,#print,#csv,#reread');
+      const t = e.target.closest('[data-area],[data-row],[data-lv],[data-off],#puton,#blind,#print,#csv,#reread');
       if (!t) return;
       if (t.dataset.area) openArea(t.dataset.area);
-      else if (t.dataset.row) { LEVELS = null; openRow(t.dataset.row); }
+      else if (t.dataset.row) { LEVELS = null; OFF = new Set(); openRow(t.dataset.row); }
       else if (t.dataset.lv) toggleLevel(t.dataset.lv);
+      else if (t.dataset.off) {
+        const k = t.dataset.off;
+        if (!OFF.delete(k)) OFF.add(k);
+        drawSheet();
+        // The sheet is redrawn; stay on the same line for the next tap or key.
+        const b = document.querySelector(`[data-off="${CSS.escape(k)}"]`);
+        if (b) b.focus({ preventScroll: true });
+      }
+      else if (t.id === 'puton') { OFF = new Set(); drawSheet(); }
       else if (t.id === 'blind') { BLIND = !BLIND; drawSheet(); remember(); }
       else if (t.id === 'print') window.print();
       else if (t.id === 'csv') downloadCsv();
