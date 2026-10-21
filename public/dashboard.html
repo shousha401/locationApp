@@ -321,6 +321,7 @@
     <div class="grow"></div>
     <a class="navlink" href="/">📍 Feed</a>
     <a class="navlink" href="/requests.html">💬 Requests</a>
+    <a class="navlink hidden" id="countLink" href="/count.html">📋 Cycle count</a>
     <a class="navlink hidden" id="areasLink" href="/areas.html">🏭 Areas</a>
     <a class="navlink hidden" id="historyLink" href="/history.html">🕘 History</a>
     <span class="who" id="who"></span>
@@ -1936,6 +1937,7 @@
       try {
         ME = await (await fetch('/api/session')).json();
         $('who').textContent = ME.username;
+        if (ME.role === 'editor' || ME.role === 'admin') $('countLink').classList.remove('hidden');
         if (ME.role === 'admin') {
           $('historyLink').classList.remove('hidden');
           $('areasLink').classList.remove('hidden');

@@ -14,6 +14,7 @@ const groups = require('./backend/groups');
 const today = require('./backend/today');
 const history = require('./backend/history');
 const areas = require('./backend/areas');
+const counts = require('./backend/counts');
 
 const app = express();
 app.use(express.json({ limit: '256kb' }));
@@ -367,6 +368,29 @@ app.post('/api/areas/rescan', auth.requireAdmin, async (req, res) => {
 app.get('/api/areas/:prefix', auth.requireAdmin, async (req, res) => {
   try {
     const r = await areas.get(req.params.prefix, req.query.fresh === '1');
+    if (r.error) return res.status(400).json(r);
+    res.json(r);
+  } catch (e) { areaFail(res, e); }
+});
+
+// ── Cycle-count sheets (editors and admins) ──────────────────────────────────
+// One row of racking listed bin by bin and pallet by pallet, to print and
+// count. Read-only, from its own store (counts.js), like the areas above —
+// but opened to editors, who run the counts. The area list is its own route
+// because /api/areas is admin-only.
+app.get('/api/counts', auth.requireEditor, async (_req, res) => {
+  try { res.json(await counts.list()); } catch (e) { areaFail(res, e); }
+});
+app.get('/api/counts/:prefix', auth.requireEditor, async (req, res) => {
+  try {
+    const r = await counts.rows(req.params.prefix, req.query.fresh === '1');
+    if (r.error) return res.status(400).json(r);
+    res.json(r);
+  } catch (e) { areaFail(res, e); }
+});
+app.get('/api/counts/:prefix/sheet', auth.requireEditor, async (req, res) => {
+  try {
+    const r = await counts.sheet(req.params.prefix, String(req.query.row || ''));
     if (r.error) return res.status(400).json(r);
     res.json(r);
   } catch (e) { areaFail(res, e); }

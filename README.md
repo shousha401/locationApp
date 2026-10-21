@@ -52,6 +52,15 @@ the **Today board** (below), so signing in starts with what has to happen today:
 - **💬 Requests** (`/requests.html`) — the app's build queue. Users write what they
   want the app to show; the build side reads the thread and ships it. Seeded with
   interview questions on first run.
+- **📋 Cycle count** (`/count.html`, editors and admins) — the overstock count sheet for
+  one row (Cooler 1 · F row, Freezer 1 · K row …), built from Swarmbox when it is
+  opened: every bin, product and pallet with its system quantity, in walking order (bay,
+  spot, then level). It replaces the sheets the team built by hand in Excel, in the same
+  columns, so **🖨 Print** gives the paper work sheet and **⬇ Download for Excel** a .csv
+  that pastes into the old workbook. Level chips pick the rack levels; A, the pick level,
+  starts off, as it never appears on those sheets. Read-only like Areas, from its own
+  store (`backend/counts.js`): one read per area, kept 15 minutes, and the bulk areas
+  Areas refuses are refused here too. Nothing records the counts yet.
 
 ## How it works
 
