@@ -58,7 +58,10 @@ the **Today board** (below), so signing in starts with what has to happen today:
   spot, then level). It replaces the sheets the team built by hand in Excel, in the same
   columns, so **🖨 Print** gives the paper work sheet and **⬇ Download for Excel** a .csv
   that pastes into the old workbook. Level chips pick the rack levels; A, the pick level,
-  starts off, as it never appears on those sheets. Read-only like Areas, from its own
+  starts off, as it never appears on those sheets. **🙈 Blind count** prints the sheet
+  without the system quantity (or over/short), so the counter writes what is on the
+  rack rather than the number they expect; the Excel download keeps it, as the copy
+  to check their count against. Read-only like Areas, from its own
   store (`backend/counts.js`): one read per area, kept 15 minutes, and the bulk areas
   Areas refuses are refused here too. Nothing records the counts yet.
 

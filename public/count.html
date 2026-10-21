@@ -81,11 +81,18 @@
       color:var(--muted); font:inherit; font-weight:700; cursor:pointer; }
     .levels button.on { background:var(--accent); border-color:var(--accent); color:#04222f; }
     .levels button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+    /* Blind count: the switch reads as ON at a glance, because printing the
+       wrong kind of sheet for a blind count gives the answer away. */
+    button.small.on { border-color:var(--warn); color:var(--warn); background:rgba(251,191,36,.1); font-weight:700; }
+    .blindnote { padding:9px 16px; border-bottom:1px solid var(--line); font-size:12px; color:var(--warn);
+      background:rgba(251,191,36,.06); }
+    .sheet.blind td.w { min-width:90px; }
+    .sheet.blind td.w.note { min-width:220px; }
 
     @media print {
       @page { size:landscape; margin:10mm; }
       body { background:#fff; color:#000; font-size:10.5px; }
-      header, .intro, .step, .grid, .head, .levels, .foot, #msg { display:none !important; }
+      header, .intro, .step, .grid, .head, .blindnote, .levels, .foot, #msg { display:none !important; }
       .wrap { max-width:none; padding:0; }
       .card { border:0; border-radius:0; background:#fff; }
       .scroll { overflow:visible; }
@@ -100,6 +107,8 @@
       .sheet tr.newbin td { border-top:2px solid #000; }
       .sheet td.w { min-width:48px; border-left:1px solid #000; }
       .sheet td.w.note { min-width:120px; }
+      .sheet.blind td.w { min-width:80px; }
+      .sheet.blind td.w.note { min-width:200px; }
       .sheet thead { display:table-header-group; }
       .sheet tr { break-inside:avoid; }
       .sheet tr.found td { height:26px; }
@@ -150,14 +159,20 @@
     let AREA = null;   // the area's row list
     let SHEET = null;  // the row on screen
     let LEVELS = null; // the levels picked by hand for this row; null = the default
+    // A blind count: the sheet goes to the counter without the system quantity
+    // (nor over/short, which need it), so they write what is on the rack rather
+    // than tick off the number they expect. It stays on from row to row — it is
+    // how this round of counting is run, not a property of one row.
+    let BLIND = false;
     let WANT = '';     // what was last asked for — a slow answer to an older click is dropped
 
-    // ?area=JC&row=1-F&levels=CDEF, so a sheet can be bookmarked or sent to someone.
+    // ?area=JC&row=1-F&levels=CDEF&blind=1, so a sheet can be bookmarked or sent to someone.
     function remember() {
       const q = new URLSearchParams();
       if (AREA) q.set('area', AREA.prefix);
       if (SHEET) q.set('row', SHEET.key);
       if (SHEET && LEVELS) q.set('levels', [...LEVELS].sort().join(''));
+      if (SHEET && BLIND) q.set('blind', '1');
       history.replaceState(null, '', q.toString() ? `?${q}` : location.pathname);
     }
 
@@ -253,6 +268,10 @@
       const pallets = new Set(list.map((l) => l.pallet).filter(Boolean)).size;
       const size = `${plural(list.length, 'line')} · ${plural(bins, 'bin')} · ${plural(pallets, 'pallet')}`;
       const lvls = present.length ? ` · levels ${span(picked)}` : '';
+      // A blind sheet keeps what the counter needs to find the stock and has
+      // nothing that gives the answer away.
+      const cols = BLIND ? 6 : 9;
+      const tail = BLIND ? '<td class="w"></td><td class="w note"></td>' : null;
       let prev = '';
       const lines = list.map((l) => {
         const cls = l.location === prev ? 'same' : (prev ? 'newbin' : '');
@@ -260,35 +279,42 @@
         return `<tr class="${cls}">
           <td class="loc mono">${esc(l.location)}</td><td class="mono">${esc(l.item)}</td>
           <td class="desc">${esc(l.description)}</td><td class="pal mono">${esc(l.pallet || '—')}</td>
-          <td class="w"></td><td class="num">${esc(qtyStr(l.qty))}</td>
-          <td class="w"></td><td class="w"></td><td class="w note"></td></tr>`;
+          ${tail || `<td class="w"></td><td class="num">${esc(qtyStr(l.qty))}</td>
+          <td class="w"></td><td class="w"></td><td class="w note"></td>`}</tr>`;
       }).join('');
       const found = Array.from({ length: FOUND_LINES }, () =>
-        '<tr class="found"><td></td><td></td><td></td><td></td><td class="w"></td><td></td><td class="w"></td><td class="w"></td><td class="w note"></td></tr>').join('');
+        `<tr class="found"><td></td><td></td><td></td><td></td>${tail
+          || '<td class="w"></td><td></td><td class="w"></td><td class="w"></td><td class="w note"></td>'}</tr>`).join('');
       $('sheet').innerHTML = `<div class="card">
         <div class="head">
           <h2>${esc(s.label)}</h2><small class="mono">${esc(codeOf(s))}</small>
           <small>${esc(size)} · system quantities as of ${esc(clock(s.builtAt))}</small>
           <div class="grow"></div>
-          <button class="small" id="csv" title="A .csv in the same columns as the Excel work sheet">⬇ Download for Excel</button>
+          <button class="small${BLIND ? ' on' : ''}" id="blind" aria-pressed="${BLIND}"
+            title="Print the sheet without the system quantity, so the counter writes what they find">🙈 Blind count${BLIND ? ': on' : ''}</button>
+          <button class="small" id="csv" title="A .csv in the same columns as the Excel work sheet — always with the system quantity, to check the count against">⬇ Download for Excel</button>
           <button class="small go" id="print">🖨 Print</button>
         </div>
+        ${BLIND ? `<div class="blindnote">Blind count: the sheet below, and the printout, have no system quantity and no
+          over/short, so the counter can't see what to expect. Download for Excel still has the system quantity, to check
+          their count against.</div>` : ''}
         ${present.length ? `<div class="levels">Levels on this sheet
           ${present.map((v) => `<button class="${picked.has(v) ? 'on' : ''}" data-lv="${esc(v)}" aria-pressed="${picked.has(v)}">${esc(v)}</button>`).join('')}
           <span>— A is the pick level and starts off, as on the Excel sheets.</span></div>` : ''}
         <div class="paperhead">
-          <h2>CYCLE COUNT WORK SHEET</h2>
+          <h2>${BLIND ? 'BLIND ' : ''}CYCLE COUNT WORK SHEET</h2>
           <span>ZONE: <b>${esc(s.label)}</b> <span class="mono">(${esc(codeOf(s))})</span></span>
           <span>NAME: <span class="fill"></span></span>
           <span>DATE: <b>${esc(day)}</b></span>
-          <small>${esc(size + lvls)} · system quantities read from Swarmbox at ${esc(clock(s.builtAt))}
-            — stock that moved after that will not match</small>
+          <small>${esc(size + lvls)} · ${BLIND
+            ? `list read from Swarmbox at ${esc(clock(s.builtAt))} — count every pallet; write anything not listed at the end`
+            : `system quantities read from Swarmbox at ${esc(clock(s.builtAt))} — stock that moved after that will not match`}</small>
         </div>
-        <div class="scroll"><table class="sheet">
+        <div class="scroll"><table class="sheet${BLIND ? ' blind' : ''}">
           <thead><tr><th>Location</th><th>Item</th><th>Description</th><th>Pallet ID</th>
-            <th>Phy. qty</th><th class="num">Sys. qty</th><th>Over</th><th>Short</th><th>Reason / notes</th></tr></thead>
-          <tbody>${lines || '<tr><td colspan="9" class="empty">Nothing in this row right now.</td></tr>'}
-            <tr class="foundhead"><td colspan="9">Found in the row but not on this sheet</td></tr>${found}</tbody>
+            <th>Phy. qty</th>${BLIND ? '' : '<th class="num">Sys. qty</th><th>Over</th><th>Short</th>'}<th>Reason / notes</th></tr></thead>
+          <tbody>${lines || `<tr><td colspan="${cols}" class="empty">Nothing in this row right now.</td></tr>`}
+            <tr class="foundhead"><td colspan="${cols}">Found in the row but not on this sheet</td></tr>${found}</tbody>
         </table></div>
         <div class="foot">Bins with stock only: Swarmbox lists nothing for an empty spot, so a pallet found in an empty spot
           goes in the blank lines at the end.</div>
@@ -327,11 +353,12 @@
     }
 
     document.addEventListener('click', (e) => {
-      const t = e.target.closest('[data-area],[data-row],[data-lv],#print,#csv,#reread');
+      const t = e.target.closest('[data-area],[data-row],[data-lv],#blind,#print,#csv,#reread');
       if (!t) return;
       if (t.dataset.area) openArea(t.dataset.area);
       else if (t.dataset.row) { LEVELS = null; openRow(t.dataset.row); }
       else if (t.dataset.lv) toggleLevel(t.dataset.lv);
+      else if (t.id === 'blind') { BLIND = !BLIND; drawSheet(); remember(); }
       else if (t.id === 'print') window.print();
       else if (t.id === 'csv') downloadCsv();
       else if (t.id === 'reread' && AREA) openArea(AREA.prefix, true);
@@ -364,6 +391,7 @@
           if (row && AREA && AREA.rows.some((r) => r.key === row)) {
             const lv = (q.get('levels') || '').toUpperCase().replace(/[^A-Z]/g, '');
             if (lv) LEVELS = new Set(lv);
+            BLIND = q.get('blind') === '1';
             openRow(row);
           }
         }
