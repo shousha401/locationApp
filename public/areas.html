@@ -53,6 +53,7 @@
     .tile.on { border-color:var(--accent); background:rgba(56,189,248,.1); }
     .tile b { display:block; font-size:20px; font-weight:800; letter-spacing:.02em; }
     .tile span { display:block; font-size:12px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .tile span.free { color:var(--good); }
     .tile.blocked { cursor:default; opacity:.55; }
     .tile.blocked:hover { border-color:var(--line); }
 
@@ -230,10 +231,27 @@
       return j;
     }
 
+    // Empty spots: exact where the slots are known one by one (GT), otherwise
+    // the gaps the survey counts — a spot with nothing in it between pallets on
+    // the same level of a bay, the green spots in Racks. Swarmbox lists only
+    // bins with stock, so that is a floor, not the whole answer. An area with
+    // no racking codes has no line.
+    const GAPS = 'At least this many: spots with nothing in Swarmbox between pallets on the same level of a bay '
+      + '(green in Racks). Empty spots past the last pallet on a level are not seen, because Swarmbox lists only bins with stock.';
+    function emptyLine(a) {
+      if (a.blocked) return '';
+      if (a.free != null) return `<span class="free" title="Slots with no pallet, counted from the rack's own list">${esc(plural(a.free, 'free slot'))}</span>`;
+      if (a.racked) return `<span class="free" title="${esc(GAPS)}">${a.empty
+        ? `${esc(fmtInt(a.empty))}+ empty spot${a.empty === 1 ? '' : 's'}` : 'no empty spots seen'}</span>`;
+      return '';
+    }
+
     function drawDir() {
       $('surveyed').innerHTML = `${esc(plural(DIR.areas.filter((a) => !a.home).length, 'area'))} besides <b>${esc(DIR.home)}</b> · list read `
         + `${esc(new Date(DIR.surveyedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }))}`
-        + (DIR.stale ? ` · <span class="err">could not re-read it just now</span>` : '');
+        + (DIR.stale ? ` · <span class="err">could not re-read it just now</span>` : '')
+        + (DIR.areas.some((a) => !a.blocked && a.free == null && a.racked)
+          ? ` · <span title="${esc(GAPS)}">“+ empty” counts gaps between pallets on a level, so there may be more</span>` : '');
       $('rescan').disabled = false;
       $('grid').innerHTML = DIR.areas.map((a) => `
         <button class="tile${a.blocked ? ' blocked' : ''}${a.home ? ' home' : ''}${a.prefix === WANT ? ' on' : ''}"
@@ -241,6 +259,7 @@
           <b>${esc(a.prefix)}</b>
           <span>${a.slots ? `${fmtInt(a.slots)} slots` : esc(plural(a.bins, 'bin'))}</span>
           <span>${a.blocked ? 'bulk — not opened' : esc(plural(a.pallets, 'pallet'))}</span>
+          ${emptyLine(a)}
         </button>`).join('');
     }
 
@@ -292,7 +311,7 @@
         let a = aisles.get(p.aisle);
         if (!a) { a = { name: p.aisle, bays: new Map(), top: 'A', bins: [] }; aisles.set(p.aisle, a); }
         let b = a.bays.get(p.bay);
-        if (!b) { b = { name: p.bay, label: p.label, lo: p.spot, hi: p.spot, at: new Map(), slots: new Set() }; a.bays.set(p.bay, b); }
+        if (!b) { b = { name: p.bay, label: p.label, lo: p.spot, hi: p.spot, at: new Map(), slots: new Set(), run: new Map() }; a.bays.set(p.bay, b); }
         b.lo = Math.min(b.lo, p.spot);
         b.hi = Math.max(b.hi, p.spot);
         if (p.level > a.top) a.top = p.level;
@@ -310,6 +329,11 @@
         const { a, b, key } = place(p);
         b.at.set(key, l);
         a.bins.push(l);
+        // Each level's run of spot numbers in use, first to last: an empty spot
+        // inside it is a gap between pallets, the one kind of empty this page
+        // can vouch for (emptySpots in areas.js counts the same for the tile).
+        const r = b.run.get(p.level);
+        b.run.set(p.level, r ? [Math.min(r[0], p.spot), Math.max(r[1], p.spot)] : [p.spot, p.spot]);
       }
       const nat = (x, y) => x.localeCompare(y, undefined, { numeric: true });
       const list = [...aisles.values()].sort((x, y) => nat(x.name, y.name));
@@ -419,19 +443,26 @@
         const levels = [];
         for (let c = a.top.charCodeAt(0); c >= 65; c--) levels.push(String.fromCharCode(c));
         const pallets = a.bins.reduce((n, l) => n + l.pallets, 0);
+        let gaps = 0; // the cooler's share of the tile's "+ empty spots"
         const bays = a.bayList.map((b) => {
           const start = Math.min(1, b.lo);
           const cells = [];
           for (const L of levels) {
+            const run = b.run.get(L);
             for (let s = start; s <= b.hi; s++) {
               const l = b.at.get(`${L}${s}`);
+              const spot = `${L}${String(s).padStart(2, '0')}`;
+              const gap = !l && run && s > run[0] && s < run[1];
+              if (gap && !b.slots.size) gaps++;
               cells.push(l
                 ? `<div class="slot"><button class="load${PICK === l.code ? ' sel' : ''}${q && matches(l, q) ? ' match' : ''}"
                     style="--c:${colourOf(l)}" data-bin="${esc(l.code)}" title="${esc(binTitle(l))}"
                     aria-label="${esc(binTitle(l))}">${l.pallets ? fmtInt(l.pallets) : '•'}</button></div>`
                 : b.slots.has(`${L}${s}`)
-                  ? `<div class="slot vacant free" title="${esc(`${b.label}.${L}${String(s).padStart(2, '0')} — empty slot`)}"></div>`
-                  : `<div class="slot vacant" title="${esc(`${L}${String(s).padStart(2, '0')} — nothing recorded`)}"></div>`);
+                  ? `<div class="slot vacant free" title="${esc(`${b.label}.${spot} — empty slot`)}"></div>`
+                  : gap
+                    ? `<div class="slot vacant free gap" title="${esc(`${b.label}.${spot} — empty: nothing recorded, with pallets either side on this level`)}"></div>`
+                    : `<div class="slot vacant" title="${esc(`${spot} — nothing recorded`)}"></div>`);
             }
           }
           return `<div class="bay"><div class="bay-grid" style="grid-template-columns:repeat(${b.hi - start + 1},var(--col))">${cells.join('')}</div>
@@ -441,12 +472,14 @@
         const free = a.bayList.reduce((n, b) => n + [...b.slots].filter((k) => !b.at.has(k)).length, 0);
         view = `<div class="facehead"><h3>Cooler ${esc(a.name)}</h3>
             <small>${esc(plural(a.bayList.length, AREA.slots ? 'zone' : 'bay'))}, levels A–${esc(a.top)}, ${esc(plural(a.bins.length, 'bin'))} with ${esc(plural(pallets, 'pallet'))}${
-              known ? `, ${esc(plural(free, 'free slot'))} of ${fmtInt(known)}` : ''}</small>
+              known ? `, ${esc(plural(free, 'free slot'))} of ${fmtInt(known)}`
+                : gaps ? `, <span title="${esc(GAPS)}">${esc(fmtInt(gaps))}+ empty spot${gaps === 1 ? '' : 's'}</span>` : ''}</small>
             <div class="legend"><span class="modes">
               <button data-mode="age" class="${MODE === 'age' ? 'on' : ''}">Colour by age</button>
               <button data-mode="pallets" class="${MODE === 'pallets' ? 'on' : ''}">by pallets</button></span>${legend()}
               ${known ? '<span><i style="background:rgba(52,211,153,.08);box-shadow:none;border:1px dashed rgba(52,211,153,.7)"></i>empty slot</span>'
-                : '<span><i style="background:none;box-shadow:none;border:1px dashed rgba(148,163,184,.5)"></i>nothing recorded</span>'}</div></div>
+                : `<span title="${esc(GAPS)}"><i style="background:rgba(52,211,153,.08);box-shadow:none;border:1px dashed rgba(52,211,153,.7)"></i>empty, between pallets</span>
+                  <span><i style="background:none;box-shadow:none;border:1px dashed rgba(148,163,184,.5)"></i>nothing recorded</span>`}</div></div>
           <div class="face${q ? ' searching' : ''}${walked ? ' walked' : ''}">
             <div class="rack"><div class="lvls" style="padding-top:0">${levels.map((L) => `<span>${L}</span>`).join('')}</div>${bays}</div>
           </div>`;

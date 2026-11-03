@@ -54,10 +54,51 @@ const up = (v) => String(v == null ? '' : v).trim().toUpperCase();
 const areaOf = (loc) => { const i = loc.indexOf('.'); return up(i < 0 ? loc : loc.slice(0, i)); };
 const PREFIX_OK = /^[A-Z0-9]{1,6}$/;
 
+// ── Empty spots ──────────────────────────────────────────────────────────────
+// Swarmbox lists only bins with stock in them (slots.js says why), so outside GT
+// nothing says for sure which spots are empty. What can be counted is the gaps:
+// a spot with nothing in it while spots on both sides of it, on the same level
+// of the same bay, have stock — D2.K.02.B05 when B04 and B06 hold pallets. A
+// level's own run of spot numbers is the only safe guide, because levels differ
+// (D2's upper levels start at spot 16, its floor level at 1). Empty spots past
+// a level's last pallet, and levels with nothing at all, are not seen, so the
+// count is a floor: "at least this many". The rack view marks the same gaps
+// (buildLayout in areas.html), reading the code the same way (parseBin there).
+function placeOf(code) {
+  const s = code.split('.');
+  if (s.length !== 4) return null;
+  const lv = /^([A-Z])(\d{1,3})$/.exec(up(s[3]));
+  if (!lv) return null;
+  const lettered = /^([A-Z])(\d{1,3})$/.exec(up(s[2]));
+  if (lettered) return { aisle: `${up(s[1])}-${lettered[1]}`, bay: lettered[2], level: lv[1], spot: Number(lv[2]) };
+  if (/^\d{1,3}$/.test(s[2])) return { aisle: up(s[1]), bay: s[2], level: lv[1], spot: Number(lv[2]) };
+  return null;
+}
+
+function emptySpots(codes) {
+  const levels = new Map(); // aisle|bay|level -> the spot numbers in use
+  let racked = 0;
+  for (const code of codes) {
+    const p = placeOf(code);
+    if (!p) continue;
+    racked++;
+    const k = `${p.aisle}|${p.bay}|${p.level}`;
+    if (!levels.has(k)) levels.set(k, new Set());
+    levels.get(k).add(p.spot);
+  }
+  let empty = 0;
+  for (const used of levels.values()) empty += Math.max(...used) - Math.min(...used) + 1 - used.size;
+  return { racked, empty };
+}
+
 // ── Survey ───────────────────────────────────────────────────────────────────
-let survey = null;   // { at: ISO, areas: [{ prefix, bins, pallets, rows }] }
+// { v, at: ISO, areas: [{ prefix, bins, pallets, rows, racked, empty }] }
+let survey = null;
 let surveying = null; // the read in flight, shared by everyone waiting on it
 let lastRescan = 0;
+// Bumped when the survey gains a field. An older one on file is still served
+// while it is re-read, and kept if the re-read fails.
+const SURVEY_V = 2;
 
 try {
   const o = JSON.parse(fs.readFileSync(FILE, 'utf8'));
@@ -83,8 +124,9 @@ async function runSurvey() {
     a.bins.add(loc);
     if (r.pallet) a.pallets.add(r.pallet);
   }
-  survey = { at: new Date().toISOString(),
-    areas: [...m].map(([prefix, a]) => ({ prefix, bins: a.bins.size, pallets: a.pallets.size, rows: a.rows }))
+  survey = { v: SURVEY_V, at: new Date().toISOString(),
+    areas: [...m].map(([prefix, a]) => ({ prefix, bins: a.bins.size, pallets: a.pallets.size, rows: a.rows,
+      ...emptySpots(a.bins) }))
       .sort((x, y) => y.bins - x.bins || x.prefix.localeCompare(y.prefix)) };
   try {
     fs.mkdirSync(path.dirname(FILE), { recursive: true });
@@ -110,8 +152,11 @@ function homeTile() {
   const bins = new Set();
   const pallets = new Set();
   for (const r of h.rows) { bins.add(r.location); if (r.pallet) pallets.add(r.pallet); }
+  // GT's slots are known one by one, so its empty count is exact: the free
+  // slots the Today board counts.
   return { prefix: HOME, bins: bins.size, pallets: pallets.size, rows: h.rows.length, home: true,
-    ...(slots.applies(HOME) ? { slots: slots.ALL.length } : {}) };
+    ...(slots.applies(HOME) ? { slots: slots.ALL.length, free: slots.ALL.filter((c) => !bins.has(c)).length }
+      : emptySpots(bins)) };
 }
 
 const describe = (s) => {
@@ -124,11 +169,12 @@ const describe = (s) => {
   };
 };
 
-// The directory. Reads Swarmbox only when there is no survey yet or the one on
-// file is more than a day old; a failed re-read falls back to the old list,
-// which is still a better answer than an error.
+// The directory. Reads Swarmbox only when there is no survey yet, the one on
+// file is more than a day old, or it is from before the last new field; a
+// failed re-read falls back to the old list, which is still a better answer
+// than an error.
 async function list() {
-  if (survey && Date.now() - Date.parse(survey.at) < SURVEY_TTL_MS) return describe(survey);
+  if (survey && survey.v === SURVEY_V && Date.now() - Date.parse(survey.at) < SURVEY_TTL_MS) return describe(survey);
   try {
     return describe(await surveyOnce());
   } catch (e) {

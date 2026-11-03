@@ -433,9 +433,16 @@ to cooler; a search lights up the pallets holding a product and jumps to the fir
 that has one; tapping a pallet lists what is on it. Swarmbox has no floor plan, so the
 racking is read from the bin code: `F.A.03.E01` is cooler A, bay 03, level E (A is the
 floor), spot 01; a lettered middle part names the cooler with it (`JF.1.C03.G06` → cooler
-1-C, bay 03). Empty spots are inferred from the shape of the bay, since Swarmbox only
+1-C, bay 03). The shape of the bay is inferred the same way, since Swarmbox only
 returns bins with stock, and codes that aren't rack positions (floors, docks, desks) are
 listed under **Floor & other**.
+
+**Empty spots.** Each tile says how many: exact for GT (free slots, from `slots.js`),
+and for the other areas a floor — **"245+ empty spots"** — counted by the survey as the
+gaps between pallets on one level of a bay (`D2.K.02.B05` with nothing in it while B04
+and B06 hold stock). Those are drawn green in Racks; the faint dashed spots are only
+"nothing recorded", because levels differ (D2's upper levels start at spot 16) and an
+empty run past a level's last pallet can't be told from racking that isn't there.
 
 GT has a tile there too, marked as the app's own area. Its rack view is folded from the
 snapshot the board already runs on, so it never reads Swarmbox, and because GT's
